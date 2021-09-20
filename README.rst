@@ -94,11 +94,15 @@ devices recognized by the driver::
 
   $ groupadd ch341
   $ adduser "$USER" ch341
-  $ echo 'SUBSYSTEMS=="usb" DRIVERS=="ch341-buses", GROUP="ch341", MODE="0660"' > /etc/udev/rules.d/50-ch341.rules
+  $ echo 'SUBSYSTEMS=="usb" ATTRS{idProduct}=="5512" ATTRS{idVendor}=="1a86" GROUP="ch341" MODE="0660"' > /etc/udev/rules.d/99-ch341.rules
 
-(replace "$USER" with the user name)
+After plugging in the USB device, the various /dev entries will be
+accessible to the ch341 group::
 
-(^ TODO - NOT FULLY WORKING)
+  $ ls -l /dev/* | grep ch341
+  crw-rw----   1 root ch341   254,   2 Sep 20 01:12 /dev/gpiochip2
+  crw-rw----   1 root ch341    89,  11 Sep 20 01:12 /dev/i2c-11
+  crw-rw----   1 root ch341   153,   0 Sep 20 01:12 /dev/spidev0.0
 
 
 I2C
