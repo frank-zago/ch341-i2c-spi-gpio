@@ -195,9 +195,9 @@ will report the device number to use for the other tools (run as root)::
 If the SPI mode is enabled, the MOSI, MISO and SCK, and possible one
 or more of CS0/1/2, won't be available.
 
-On Ubuntu 21.04, the `libgpio` is too old and will return error when
-acessing the device. Use a more recent library. The `master` branch
-from the git tree works well::
+On Ubuntu 21.04, the `libgpio` is too old and will return an error
+when accessing the device. Use a more recent library. The `master`
+branch from the git tree works well::
 
   https://git.kernel.org/pub/scm/libs/libgpiod/libgpiod.git
 
