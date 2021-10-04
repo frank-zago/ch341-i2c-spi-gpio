@@ -207,6 +207,8 @@ SPI
 
 See above for how SPI and GPIO exclusively share some pins.
 
+Only SPI mode 0 (CPOL=0, CPHA=0) appears to be supported by the ch341.
+
 By default, SPI is enabled and only controls chip select line 0
 (CS0). This can be changed with the 'spi_cs' module parameter. This
 affect all devices controlled by the driver. A future enhancement
