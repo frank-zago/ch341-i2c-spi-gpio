@@ -15,16 +15,6 @@
 
 #include "ch341.h"
 
-/* Mask of pins to use for SPI.
- *  -1: disable SPI altogether
- *  0b0001: CS0
- *  0b0010: CS1
- *  0b0100: CS2
- *  0b1000: CS3
- */
-static int spi_cs = 0b001;	/* Enable SPI by default, with CS0 */
-module_param(spi_cs, int, 0444);
-
 /* Only one frequency of about 1.5MHz, which could be the on-board
  * 12MHz divided by 8. Keep a min_freq low to avoid errors from callers
  * asking for a lower frequency.
@@ -197,26 +187,23 @@ unreg_gpios:
 	return rc;
 }
 
-/* Add a new slave, at a given chip select pin */
-static int add_slave(struct ch341_device *dev, unsigned int cs)
+/* Add a new device, defined by the board_info. */
+static int add_slave(struct ch341_device *dev, struct spi_board_info *board_info)
 {
-	struct spi_board_info board_info = {
-		.modalias = "spidev",
-		.bus_num = dev->master->bus_num,
-		.mode = SPI_MODE_0,
-		.chip_select = cs,
-		.max_speed_hz = CH341_SPI_MAX_FREQ,
-	};
 	struct gpio_desc *desc;
+	unsigned int cs = board_info->chip_select;
 	int rc;
 
-	if (cs >= ARRAY_SIZE(spi_gpio_cs))
+	/* Sanity check */
+	if (cs >= dev->master->num_chipselect)
 		return -EINVAL;
+
+	board_info->bus_num = dev->master->bus_num;
 
 	mutex_lock(&dev->spi_lock);
 
 	if (dev->cs_allocated & BIT(cs)) {
-		rc = -EINVAL;
+		rc = -EADDRINUSE;
 		goto unlock;
 	}
 
@@ -245,22 +232,24 @@ static int add_slave(struct ch341_device *dev, unsigned int cs)
 	}
 
 	dev->spi_gpio_cs_desc[cs] = desc;
+	dev->cs_allocated |= BIT(cs);
 
-	dev->slaves[cs] = spi_new_device(dev->master, &board_info);
+	mutex_unlock(&dev->spi_lock);
+
+	dev->slaves[cs] = spi_new_device(dev->master, board_info);
 	if (!dev->slaves[cs]) {
 		rc = -ENOMEM;
 		goto release_cs;
 	}
 
-	dev->cs_allocated |= BIT(cs);
-
-	mutex_unlock(&dev->spi_lock);
-
 	return 0;
 
 release_cs:
+	mutex_lock(&dev->spi_lock);
+
 	gpiochip_free_own_desc(dev->spi_gpio_cs_desc[cs]);
 	dev->spi_gpio_cs_desc[cs] = NULL;
+	dev->cs_allocated &= ~BIT(cs);
 
 unreg_core_gpios:
 	if (dev->cs_allocated == 0)
@@ -272,10 +261,12 @@ unlock:
 	return rc;
 }
 
-static void remove_slave(struct ch341_device *dev, unsigned int cs)
+static int remove_slave(struct ch341_device *dev, unsigned int cs)
 {
+	int rc;
+
 	if (cs >= ARRAY_SIZE(spi_gpio_cs))
-		return;
+		return -EINVAL;
 
 	mutex_lock(&dev->spi_lock);
 
@@ -291,10 +282,97 @@ static void remove_slave(struct ch341_device *dev, unsigned int cs)
 			/* Last slave. Release the core GPIOs */
 			release_core_gpios(dev);
 		}
+
+		rc = 0;
+	} else {
+		rc = -ENODEV;
 	}
 
 	mutex_unlock(&dev->spi_lock);
+
+	return rc;
 }
+
+/* sysfs entry to add a new device. It takes a string with 2
+ * parameters: the modalias and the chip select number. For instance
+ * "spi-nor 0" or "spidev 1".
+ */
+static ssize_t new_device_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct spi_master *master = container_of(dev, struct spi_master, dev);
+	struct ch341_spi_priv *priv = spi_master_get_devdata(master);
+	struct spi_board_info board_info = {
+		.mode = SPI_MODE_0,
+		.max_speed_hz = CH341_SPI_MAX_FREQ,
+	};
+	char *req_org;
+	char *req;
+	char *str;
+	int rc;
+
+	req_org = kstrdup(buf, GFP_KERNEL);
+	if (!req_org)
+		return -ENOMEM;
+
+	req = req_org;
+
+	str = strsep(&req, " ");
+	if (str == NULL) {
+		rc = -EINVAL;
+		goto free_req;
+	}
+
+	rc = strscpy(board_info.modalias, str, sizeof(board_info.modalias));
+	if (rc < 0)
+		goto free_req;
+
+	str = strsep(&req, " ");
+	rc = kstrtou16(str, 0, &board_info.chip_select);
+	if (rc)
+		goto free_req;
+
+	rc = add_slave(priv->ch341_dev, &board_info);
+	if (rc) {
+		goto free_req;
+	}
+
+	kfree(req_org);
+
+	return count;
+
+free_req:
+	kfree(req_org);
+
+	return rc;
+}
+
+/* sysfs entry to remove an existing device at a given chip select. It
+ * takes a string with a single number. For instance "2".
+ */
+static ssize_t delete_device_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct spi_master *master = container_of(dev, struct spi_master, dev);
+	struct ch341_spi_priv *priv = spi_master_get_devdata(master);
+	int cs;
+	int rc;
+
+	rc = kstrtouint(buf, 0, &cs);
+	if (rc)
+		return rc;
+
+	rc = remove_slave(priv->ch341_dev, cs);
+	if (rc)
+		return rc;
+
+	return count;
+}
+
+static DEVICE_ATTR(new_device, 0220, NULL, new_device_store);
+static DEVICE_ATTR(delete_device, 0220, NULL, delete_device_store);
 
 void ch341_spi_remove(struct ch341_device *dev)
 {
@@ -303,10 +381,11 @@ void ch341_spi_remove(struct ch341_device *dev)
 	if (dev->master == NULL)
 		return;
 
-	for (cs = 0; cs < ARRAY_SIZE(dev->slaves); cs++) {
-		if (spi_cs & BIT(cs))
-			remove_slave(dev, cs);
-	}
+	device_remove_file(&dev->master->dev, &dev_attr_new_device);
+	device_remove_file(&dev->master->dev, &dev_attr_delete_device);
+
+	for (cs = 0; cs < ARRAY_SIZE(dev->slaves); cs++)
+		remove_slave(dev, cs);
 
 	spi_unregister_master(dev->master);
 
@@ -318,13 +397,6 @@ int ch341_spi_init(struct ch341_device *dev)
 	struct spi_master *master;
 	struct ch341_spi_priv *priv;
 	int rc;
-	int cs;
-
-	if (spi_cs == -1)
-		return 0;
-
-	if (spi_cs < 0 || spi_cs > 0b1111)
-		return -EINVAL;
 
 	dev->master = spi_alloc_master(&dev->iface->dev,
 				       sizeof(struct ch341_device *));
@@ -352,15 +424,22 @@ int ch341_spi_init(struct ch341_device *dev)
 	if (rc)
 		goto unreg_master;
 
-	/* The CH341A has 4 gpios that can be used as chip select.
-	 * CH341H has 3.
-	 */
-	for (cs = 0; cs < ARRAY_SIZE(spi_gpio_cs); cs++) {
-		if (spi_cs & BIT(cs))
-			add_slave(dev, cs);
+	rc = device_create_file(&master->dev, &dev_attr_new_device);
+	if (rc) {
+		dev_err(&master->dev, "Cannot create new_device file\n");
+		goto unreg_master;
+	}
+
+	rc = device_create_file(&master->dev, &dev_attr_delete_device);
+	if (rc) {
+		dev_err(&master->dev, "Cannot create delete_device file\n");
+		goto del_new_device;
 	}
 
 	return 0;
+
+del_new_device:
+	device_remove_file(&dev->master->dev, &dev_attr_new_device);
 
 unreg_master:
         spi_master_put(master);

@@ -49,9 +49,9 @@ struct ch341_device {
 
 	/* SPI */
 	struct spi_master *master;
-	struct mutex spi_lock;
+	struct mutex spi_lock;	/* protect spi_buf */
 	struct spi_device *slaves[CH341_SPI_MAX_NUM_DEVICES];
-	u8 cs_allocated;
+	u8 cs_allocated;	/* bitmask of allocated CS for SPI */
 	struct gpio_desc *spi_gpio_core_desc[3];
 	struct gpio_desc *spi_gpio_cs_desc[CH341_SPI_MAX_NUM_DEVICES];
 	u8 spi_buf[SEG_SIZE];

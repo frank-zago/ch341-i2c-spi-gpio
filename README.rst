@@ -209,24 +209,35 @@ See above for how SPI and GPIO exclusively share some pins.
 
 Only SPI mode 0 (CPOL=0, CPHA=0) appears to be supported by the ch341.
 
-By default, SPI is enabled and only controls chip select line 0
-(CS0). This can be changed with the 'spi_cs' module parameter. This
-affect all devices controlled by the driver. A future enhancement
-might allow a per-device setting. If 'spi_cs' is set to -1, SPI is
-disabled altogether and all pins can be used for GPIOs. Otherwise
-which pins are available for SPI can be set by the 'spi_cs', which is
-a mask of the CS lines::
+As long as no SPI device has been instantiated, all the GPIOs are
+available for general use. When the first device is instantiated, the
+driver will try to claim the SPI lines, plus one of the chip select.
 
-   1: CS0
-   2: CS1
-   4: CS2
-   8: CS3
+To instantiate a device, echo a command string to the device's sysfs
+'new_device' file. The command is the driver to use followed by the CS
+number. For instance, the following declares a flash memory at CS 0, and a
+user device (spidev) at CS 1:
 
-For instance, loading the driver as follows will enable SPI, with CS0
-and CS2::
+  $ echo "spi-nor 0" > /sys/class/spi_master/spi0/new_device
+  $ echo "spidev 1" > /sys/class/spi_master/spi0/new_device
 
-  $ insmod ch341-buses.ko spi_cs=5
+After these command, the GPIO lines will report:
 
-Loading the driver that way will disable the SPI support::
+  $ gpioinfo gpiochip2
+  gpiochip2 - 8 lines:
+          line   0:      unnamed        "CS0"  output  active-high [used]
+          line   1:      unnamed        "CS1"  output  active-high [used]
+          line   2:      unnamed       unused   input  active-high
+          line   3:      unnamed        "SCK"  output  active-high [used]
+          line   4:      unnamed       unused   input  active-high
+          line   5:      unnamed       "MOSI"  output  active-high [used]
+          line   6:      unnamed       unused   input  active-high
+          line   7:      unnamed       "MISO"   input  active-high [used]
 
-  $ insmod ch341-buses.ko spi_cs=-1
+To remove a device, echo its CS to 'delete_device'. The following will
+remove the spidev device created on CS 1 above:
+
+  $ echo "1" > /sys/class/spi_master/spi0/delete_device
+
+If all the devices are deleted, the SPI driver will release the SPI
+lines, which become available again for GPIO operations.
