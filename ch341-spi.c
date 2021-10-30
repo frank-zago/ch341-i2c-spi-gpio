@@ -112,7 +112,9 @@ static int ch341_spi_transfer_one(struct spi_master *master,
 
 	mutex_lock(&dev->spi_lock);
 
-	if (!(spi->mode & SPI_NO_CS)) {
+	if (spi->mode & SPI_NO_CS) {
+		cs = NULL;
+	} else {
 		cs = dev->spi_gpio_cs_desc[spi->chip_select];
 
 		if (spi->mode & SPI_CS_HIGH)
@@ -131,7 +133,7 @@ static int ch341_spi_transfer_one(struct spi_master *master,
 
 	rc = spi_transfer(dev, xfer->len);
 
-	if (!(spi->mode & SPI_NO_CS)) {
+	if (cs) {
 		if (spi->mode & SPI_CS_HIGH)
 			gpiod_set_value_cansleep(cs, 0);
 		else
