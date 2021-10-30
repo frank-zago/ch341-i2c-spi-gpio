@@ -102,7 +102,7 @@ static void ch341_memcpy_bitswap(u8 *dest, const u8 *src, size_t n)
 /* Send a message */
 static int ch341_spi_transfer_one(struct spi_master *master,
                                   struct spi_device *spi,
-                                  struct spi_transfer *t)
+                                  struct spi_transfer *xfer)
 {
 	struct ch341_spi_priv *priv = spi_master_get_devdata(master);
 	struct ch341_device *dev = priv->ch341_dev;
@@ -125,11 +125,11 @@ static int ch341_spi_transfer_one(struct spi_master *master,
 
 	/* The CH341 will send LSB first, so bit reversing may need to happen. */
 	if (lsb)
-		memcpy(&dev->spi_buf[1], t->tx_buf, t->len);
+		memcpy(&dev->spi_buf[1], xfer->tx_buf, xfer->len);
 	else
-		ch341_memcpy_bitswap(&dev->spi_buf[1], t->tx_buf, t->len);
+		ch341_memcpy_bitswap(&dev->spi_buf[1], xfer->tx_buf, xfer->len);
 
-	rc = spi_transfer(dev, t->len);
+	rc = spi_transfer(dev, xfer->len);
 
 	if (!(spi->mode & SPI_NO_CS)) {
 		if (spi->mode & SPI_CS_HIGH)
@@ -138,11 +138,11 @@ static int ch341_spi_transfer_one(struct spi_master *master,
 			gpiod_set_value_cansleep(cs, 1);
 	}
 
-	if (rc >= 0 && t->rx_buf) {
+	if (rc >= 0 && xfer->rx_buf) {
 		if (lsb)
-			memcpy(t->rx_buf, dev->spi_buf, t->len);
+			memcpy(xfer->rx_buf, dev->spi_buf, xfer->len);
 		else
-			ch341_memcpy_bitswap(t->rx_buf, dev->spi_buf, t->len);
+			ch341_memcpy_bitswap(xfer->rx_buf, dev->spi_buf, xfer->len);
 	}
 
 	spi_finalize_current_transfer(master);
