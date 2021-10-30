@@ -133,7 +133,7 @@ static int ch341_spi_transfer_one(struct spi_master *master,
 
 	rc = spi_transfer(dev, xfer->len);
 
-	if (cs) {
+	if (cs && (xfer->cs_change || spi_transfer_is_last(master, xfer))) {
 		if (spi->mode & SPI_CS_HIGH)
 			gpiod_set_value_cansleep(cs, 0);
 		else
