@@ -91,8 +91,8 @@ static void ch341_memcpy_bitswap(u8 *dest, const u8 *src, size_t n)
 
 /* Send a message */
 static int ch341_spi_transfer_one(struct spi_master *master,
-                                  struct spi_device *spi,
-                                  struct spi_transfer *xfer)
+				  struct spi_device *spi,
+				  struct spi_transfer *xfer)
 {
 	struct ch341_spi_priv *priv = spi_master_get_devdata(master);
 	struct ch341_device *dev = priv->ch341_dev;
@@ -333,9 +333,8 @@ static ssize_t new_device_store(struct device *dev,
 		goto free_req;
 
 	rc = add_slave(priv->ch341_dev, &board_info);
-	if (rc) {
+	if (rc)
 		goto free_req;
-	}
 
 	kfree(req_org);
 
@@ -370,8 +369,8 @@ static ssize_t delete_device_store(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(new_device, 0220, NULL, new_device_store);
-static DEVICE_ATTR(delete_device, 0220, NULL, delete_device_store);
+static DEVICE_ATTR_WO(new_device);
+static DEVICE_ATTR_WO(delete_device);
 
 void ch341_spi_remove(struct ch341_device *dev)
 {
@@ -387,8 +386,6 @@ void ch341_spi_remove(struct ch341_device *dev)
 		remove_slave(dev, cs);
 
 	spi_unregister_master(dev->master);
-
-	return;
 }
 
 int ch341_spi_init(struct ch341_device *dev)
@@ -442,7 +439,7 @@ del_new_device:
 	device_remove_file(&dev->master->dev, &dev_attr_new_device);
 
 unreg_master:
-        spi_master_put(master);
+	spi_master_put(master);
 	dev->master = NULL;
 
 	return rc;
