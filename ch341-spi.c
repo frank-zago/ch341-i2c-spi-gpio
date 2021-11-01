@@ -100,7 +100,7 @@ static int ch341_spi_transfer_one(struct spi_master *master,
 	bool lsb = spi->mode & SPI_LSB_FIRST;
 	int rc;
 
-	mutex_lock(&dev->spi_lock);
+	mutex_lock(&dev->spi_buf_lock);
 
 	if (spi->mode & SPI_NO_CS) {
 		cs = NULL;
@@ -139,7 +139,7 @@ static int ch341_spi_transfer_one(struct spi_master *master,
 
 	spi_finalize_current_transfer(master);
 
-	mutex_unlock(&dev->spi_lock);
+	mutex_unlock(&dev->spi_buf_lock);
 
 	return rc;
 }
@@ -234,19 +234,17 @@ static int add_slave(struct ch341_device *dev, struct spi_board_info *board_info
 	dev->spi_gpio_cs_desc[cs] = desc;
 	dev->cs_allocated |= BIT(cs);
 
-	mutex_unlock(&dev->spi_lock);
-
 	dev->slaves[cs] = spi_new_device(dev->master, board_info);
 	if (!dev->slaves[cs]) {
 		rc = -ENOMEM;
 		goto release_cs;
 	}
 
+	mutex_unlock(&dev->spi_lock);
+
 	return 0;
 
 release_cs:
-	mutex_lock(&dev->spi_lock);
-
 	gpiochip_free_own_desc(dev->spi_gpio_cs_desc[cs]);
 	dev->spi_gpio_cs_desc[cs] = NULL;
 	dev->cs_allocated &= ~BIT(cs);
@@ -274,6 +272,7 @@ static int remove_slave(struct ch341_device *dev, unsigned int cs)
 		dev->cs_allocated &= ~BIT(cs);
 
 		spi_unregister_device(dev->slaves[cs]);
+		dev->slaves[cs] = NULL;
 
 		gpiochip_free_own_desc(dev->spi_gpio_cs_desc[cs]);
 		dev->spi_gpio_cs_desc[cs] = NULL;
@@ -405,6 +404,7 @@ int ch341_spi_init(struct ch341_device *dev)
 
 	master = dev->master;
 	mutex_init(&dev->spi_lock);
+	mutex_init(&dev->spi_buf_lock);
 
 	priv = spi_master_get_devdata(master);
 	priv->ch341_dev = dev;
