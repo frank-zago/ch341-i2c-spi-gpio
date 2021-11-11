@@ -56,7 +56,7 @@ static size_t cha341_spi_max_tx_size(struct spi_device *spi)
 }
 
 /* Send a command and get a reply if requested */
-static int spi_transfer(struct ch341_device *dev, int len)
+static int spi_transfer(struct ch341_device *dev, u8 *buf, int len)
 {
 	int actual;
 	int rc;
@@ -65,14 +65,13 @@ static int spi_transfer(struct ch341_device *dev, int len)
 
 	rc = usb_bulk_msg(dev->usb_dev,
 			  usb_sndbulkpipe(dev->usb_dev, dev->ep_out),
-			  dev->spi_buf, len + 1,
-			  &actual, DEFAULT_TIMEOUT);
+			  buf, len + 1, &actual, DEFAULT_TIMEOUT);
 	if (rc < 0)
 		goto done;
 
 	rc = usb_bulk_msg(dev->usb_dev,
 			  usb_rcvbulkpipe(dev->usb_dev, dev->ep_in),
-			  dev->spi_buf, SEG_SIZE, &actual, DEFAULT_TIMEOUT);
+			  buf, SEG_SIZE, &actual, DEFAULT_TIMEOUT);
 
 	if (rc == 0)
 		rc = actual;
@@ -98,14 +97,14 @@ static int ch341_spi_transfer_one(struct spi_master *master,
 	struct ch341_device *dev = priv->ch341_dev;
 	struct gpio_desc *cs;
 	bool lsb = spi->mode & SPI_LSB_FIRST;
+	struct spi_client *client = &dev->spi_clients[spi->chip_select];
+	u8 *buf = client->buf;
 	int rc;
-
-	mutex_lock(&dev->spi_buf_lock);
 
 	if (spi->mode & SPI_NO_CS) {
 		cs = NULL;
 	} else {
-		cs = dev->spi_gpio_cs_desc[spi->chip_select];
+		cs = client->gpio;
 
 		if (spi->mode & SPI_CS_HIGH)
 			gpiod_set_value_cansleep(cs, 1);
@@ -113,15 +112,15 @@ static int ch341_spi_transfer_one(struct spi_master *master,
 			gpiod_set_value_cansleep(cs, 0);
 	}
 
-	dev->spi_buf[0] = CH341_CMD_SPI_STREAM;
+	buf[0] = CH341_CMD_SPI_STREAM;
 
 	/* The CH341 will send LSB first, so bit reversing may need to happen. */
 	if (lsb)
-		memcpy(&dev->spi_buf[1], xfer->tx_buf, xfer->len);
+		memcpy(&buf[1], xfer->tx_buf, xfer->len);
 	else
-		ch341_memcpy_bitswap(&dev->spi_buf[1], xfer->tx_buf, xfer->len);
+		ch341_memcpy_bitswap(&buf[1], xfer->tx_buf, xfer->len);
 
-	rc = spi_transfer(dev, xfer->len);
+	rc = spi_transfer(dev, buf, xfer->len);
 
 	if (cs && (xfer->cs_change || spi_transfer_is_last(master, xfer))) {
 		if (spi->mode & SPI_CS_HIGH)
@@ -132,14 +131,12 @@ static int ch341_spi_transfer_one(struct spi_master *master,
 
 	if (rc >= 0 && xfer->rx_buf) {
 		if (lsb)
-			memcpy(xfer->rx_buf, dev->spi_buf, xfer->len);
+			memcpy(xfer->rx_buf, buf, xfer->len);
 		else
-			ch341_memcpy_bitswap(xfer->rx_buf, dev->spi_buf, xfer->len);
+			ch341_memcpy_bitswap(xfer->rx_buf, buf, xfer->len);
 	}
 
 	spi_finalize_current_transfer(master);
-
-	mutex_unlock(&dev->spi_buf_lock);
 
 	return rc;
 }
@@ -192,6 +189,7 @@ static int add_slave(struct ch341_device *dev, struct spi_board_info *board_info
 {
 	struct gpio_desc *desc;
 	unsigned int cs = board_info->chip_select;
+	struct spi_client *client = &dev->spi_clients[cs];
 	int rc;
 
 	/* Sanity check */
@@ -231,11 +229,11 @@ static int add_slave(struct ch341_device *dev, struct spi_board_info *board_info
 		goto unreg_core_gpios;
 	}
 
-	dev->spi_gpio_cs_desc[cs] = desc;
+	client->gpio = desc;
 	dev->cs_allocated |= BIT(cs);
 
-	dev->slaves[cs] = spi_new_device(dev->master, board_info);
-	if (!dev->slaves[cs]) {
+	client->slave = spi_new_device(dev->master, board_info);
+	if (!client->slave) {
 		rc = -ENOMEM;
 		goto release_cs;
 	}
@@ -245,8 +243,8 @@ static int add_slave(struct ch341_device *dev, struct spi_board_info *board_info
 	return 0;
 
 release_cs:
-	gpiochip_free_own_desc(dev->spi_gpio_cs_desc[cs]);
-	dev->spi_gpio_cs_desc[cs] = NULL;
+	gpiochip_free_own_desc(client->gpio);
+	client->gpio = NULL;
 	dev->cs_allocated &= ~BIT(cs);
 
 unreg_core_gpios:
@@ -271,11 +269,11 @@ static int remove_slave(struct ch341_device *dev, unsigned int cs)
 	if (dev->cs_allocated & BIT(cs)) {
 		dev->cs_allocated &= ~BIT(cs);
 
-		spi_unregister_device(dev->slaves[cs]);
-		dev->slaves[cs] = NULL;
+		spi_unregister_device(dev->spi_clients[cs].slave);
+		dev->spi_clients[cs].slave = NULL;
 
-		gpiochip_free_own_desc(dev->spi_gpio_cs_desc[cs]);
-		dev->spi_gpio_cs_desc[cs] = NULL;
+		gpiochip_free_own_desc(dev->spi_clients[cs].gpio);
+		dev->spi_clients[cs].gpio = NULL;
 
 		if (dev->cs_allocated == 0) {
 			/* Last slave. Release the core GPIOs */
@@ -382,7 +380,7 @@ void ch341_spi_remove(struct ch341_device *dev)
 	device_remove_file(&dev->master->dev, &dev_attr_new_device);
 	device_remove_file(&dev->master->dev, &dev_attr_delete_device);
 
-	for (cs = 0; cs < ARRAY_SIZE(dev->slaves); cs++)
+	for (cs = 0; cs < ARRAY_SIZE(dev->spi_clients); cs++)
 		remove_slave(dev, cs);
 
 	spi_unregister_master(dev->master);
@@ -401,7 +399,6 @@ int ch341_spi_init(struct ch341_device *dev)
 
 	master = dev->master;
 	mutex_init(&dev->spi_lock);
-	mutex_init(&dev->spi_buf_lock);
 
 	priv = spi_master_get_devdata(master);
 	priv->ch341_dev = dev;
