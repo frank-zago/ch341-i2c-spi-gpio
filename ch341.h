@@ -21,6 +21,11 @@
 /* Number of SPI devices the device can control */
 #define CH341_SPI_MAX_NUM_DEVICES 4
 
+/* Number of segments in each SPI transfer buffer. The device will
+ * crash if more than 4.
+ */
+#define CH341_SPI_NSEGS 4
+
 struct ch341_device {
 	struct usb_device *usb_dev;
 	struct usb_interface *iface;
@@ -55,7 +60,7 @@ struct ch341_device {
 	struct spi_client {
 		struct spi_device *slave;
 		struct gpio_desc *gpio;
-		u8 buf[SEG_SIZE];
+		u8 buf[CH341_SPI_NSEGS * SEG_SIZE];
 	} spi_clients[CH341_SPI_MAX_NUM_DEVICES];
 };
 

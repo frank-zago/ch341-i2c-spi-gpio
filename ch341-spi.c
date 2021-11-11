@@ -52,29 +52,38 @@ struct ch341_spi_priv {
 
 static size_t cha341_spi_max_tx_size(struct spi_device *spi)
 {
-	return SEG_SIZE - 1;
+	return CH341_SPI_NSEGS * (SEG_SIZE - 1);
 }
 
 /* Send a command and get a reply if requested */
-static int spi_transfer(struct ch341_device *dev, u8 *buf, int len)
+static int spi_transfer(struct ch341_device *dev, u8 *buf, int len, int nsegs)
 {
 	int actual;
+	int sz_read = 0;
 	int rc;
 
 	mutex_lock(&dev->usb_lock);
 
 	rc = usb_bulk_msg(dev->usb_dev,
 			  usb_sndbulkpipe(dev->usb_dev, dev->ep_out),
-			  buf, len + 1, &actual, DEFAULT_TIMEOUT);
+			  buf, len, &actual, DEFAULT_TIMEOUT);
 	if (rc < 0)
 		goto done;
 
-	rc = usb_bulk_msg(dev->usb_dev,
-			  usb_rcvbulkpipe(dev->usb_dev, dev->ep_in),
-			  buf, SEG_SIZE, &actual, DEFAULT_TIMEOUT);
+	do {
+		rc = usb_bulk_msg(dev->usb_dev,
+				  usb_rcvbulkpipe(dev->usb_dev, dev->ep_in),
+				  &buf[sz_read], SEG_SIZE, &actual, DEFAULT_TIMEOUT);
+
+		if (rc == 0)
+			sz_read += actual;
+
+		nsegs--;
+
+	} while (rc == 0 && nsegs);
 
 	if (rc == 0)
-		rc = actual;
+		rc = sz_read;
 
 done:
 	mutex_unlock(&dev->usb_lock);
@@ -88,18 +97,71 @@ static void ch341_memcpy_bitswap(u8 *dest, const u8 *src, size_t n)
 		*dest++ = bitrev8(*src++);
 }
 
+/* Copy a TX buffer to the device buffer, adding the STREAM command as
+ * needed.
+ */
+static unsigned int copy_to_device(u8 *buf, unsigned int buf_idx,
+				   const u8 *tx_buf, unsigned int len, bool lsb)
+{
+	int to_copy;
+
+	while (len) {
+		if (buf_idx % SEG_SIZE == 0) {
+			buf[buf_idx] = CH341_CMD_SPI_STREAM;
+			buf_idx++;
+		}
+
+		to_copy = min(len, SEG_SIZE - (buf_idx % SEG_SIZE));
+
+		if (tx_buf) {
+			if (lsb)
+				memcpy(&buf[buf_idx], tx_buf, to_copy);
+			else
+				ch341_memcpy_bitswap(&buf[buf_idx], tx_buf,
+						     to_copy);
+		} else {
+			memset(&buf[buf_idx], 0, to_copy);
+		}
+
+		len -= to_copy;
+		buf_idx += to_copy;
+		tx_buf += to_copy;
+	}
+
+	return buf_idx;
+}
+
+/* Copy from the device buffer to a receive buffer */
+static unsigned int copy_from_device(u8 *rx_buf, const u8 *buf,
+				     unsigned int buf_idx, unsigned int len,
+				     bool lsb)
+{
+	if (rx_buf) {
+		if (lsb)
+			memcpy(rx_buf, &buf[buf_idx], len);
+		else
+			ch341_memcpy_bitswap(rx_buf, &buf[buf_idx], len);
+	}
+
+	buf_idx += len;
+
+	return buf_idx;
+}
+
 /* Send a message */
-static int ch341_spi_transfer_one(struct spi_master *master,
-				  struct spi_device *spi,
-				  struct spi_transfer *xfer)
+static int ch341_spi_transfer_one_message(struct spi_master *master,
+					  struct spi_message *m)
 {
 	struct ch341_spi_priv *priv = spi_master_get_devdata(master);
 	struct ch341_device *dev = priv->ch341_dev;
+	struct spi_device *spi = m->spi;
+	struct spi_client *client = &dev->spi_clients[spi->chip_select];
 	struct gpio_desc *cs;
 	bool lsb = spi->mode & SPI_LSB_FIRST;
-	struct spi_client *client = &dev->spi_clients[spi->chip_select];
-	u8 *buf = client->buf;
-	int rc;
+	struct spi_transfer *xfer;
+	unsigned int tx_len = 0;
+	unsigned int buf_idx = 0;
+	int status;
 
 	if (spi->mode & SPI_NO_CS) {
 		cs = NULL;
@@ -112,33 +174,34 @@ static int ch341_spi_transfer_one(struct spi_master *master,
 			gpiod_set_value_cansleep(cs, 0);
 	}
 
-	buf[0] = CH341_CMD_SPI_STREAM;
+	list_for_each_entry(xfer, &m->transfers, transfer_list) {
+		buf_idx = copy_to_device(client->buf, buf_idx, xfer->tx_buf, xfer->len, lsb);
 
-	/* The CH341 will send LSB first, so bit reversing may need to happen. */
-	if (lsb)
-		memcpy(&buf[1], xfer->tx_buf, xfer->len);
-	else
-		ch341_memcpy_bitswap(&buf[1], xfer->tx_buf, xfer->len);
+		tx_len += xfer->len;
+	}
 
-	rc = spi_transfer(dev, buf, xfer->len);
-
-	if (cs && (xfer->cs_change || spi_transfer_is_last(master, xfer))) {
+	status = spi_transfer(dev, client->buf, buf_idx, buf_idx - tx_len);
+	if (cs) {
 		if (spi->mode & SPI_CS_HIGH)
 			gpiod_set_value_cansleep(cs, 0);
 		else
 			gpiod_set_value_cansleep(cs, 1);
 	}
 
-	if (rc >= 0 && xfer->rx_buf) {
-		if (lsb)
-			memcpy(xfer->rx_buf, buf, xfer->len);
-		else
-			ch341_memcpy_bitswap(xfer->rx_buf, buf, xfer->len);
+	if (status >= 0) {
+		buf_idx = 0;
+		list_for_each_entry(xfer, &m->transfers, transfer_list)
+			buf_idx = copy_from_device(xfer->rx_buf, client->buf,
+						   buf_idx, xfer->len, lsb);
+
+		m->actual_length = tx_len;
+		status = 0;
 	}
 
-	spi_finalize_current_transfer(master);
+	m->status = status;
+	spi_finalize_current_message(master);
 
-	return rc;
+	return 0;
 }
 
 static void release_core_gpios(struct ch341_device *dev)
@@ -408,7 +471,7 @@ int ch341_spi_init(struct ch341_device *dev)
 	master->mode_bits = SPI_MODE_0 | SPI_LSB_FIRST;
 	master->flags = SPI_MASTER_MUST_RX | SPI_MASTER_MUST_TX;
 	master->bits_per_word_mask = SPI_BPW_MASK(8);
-	master->transfer_one = ch341_spi_transfer_one;
+	master->transfer_one_message = ch341_spi_transfer_one_message;
 	master->max_speed_hz = CH341_SPI_MAX_FREQ;
 	master->min_speed_hz = CH341_SPI_MIN_FREQ;
 	master->max_transfer_size = cha341_spi_max_tx_size;
