@@ -68,15 +68,23 @@ static int ch341_usb_probe(struct usb_interface *iface,
 
 	rc = ch341_gpio_init(dev);
 	if (rc)
-		goto error;
+		goto rem_i2c;
 
 	rc = ch341_spi_init(dev);
 	if (rc)
-		goto error;
+		goto rem_gpio;
 
 	return 0;
 
+rem_gpio:
+	ch341_gpio_remove(dev);
+
+rem_i2c:
+	ch341_i2c_remove(dev);
+
 error:
+	kfree(dev);
+
 	return rc;
 }
 
