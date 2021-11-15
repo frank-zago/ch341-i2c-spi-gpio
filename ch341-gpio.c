@@ -32,6 +32,9 @@
  */
 static const u16 pin_can_output = 0b00111111;
 
+/* Only GPIO 10 (INT# line) has hardware interrupt */
+#define CH341_GPIO_INT_LINE 10
+
 static void ch341_gpio_dbg_show(struct seq_file *s, struct gpio_chip *chip)
 {
 	struct ch341_device *dev = gpiochip_get_data(chip);
@@ -92,7 +95,7 @@ static int read_inputs(struct ch341_device *dev)
 	 * is unknown.
 	 */
 	if (result == 6)
-		dev->gpio_last_read = le16_to_cpu(*(u16 *)dev->gpio_buf);
+		dev->gpio_last_read = le16_to_cpu(*(__le16 *)dev->gpio_buf);
 
 	mutex_unlock(&dev->gpio_lock);
 
@@ -197,18 +200,122 @@ static int ch341_gpio_direction_output(struct gpio_chip *chip,
 	return 0;
 }
 
+static void ch341_complete_intr_urb(struct urb *urb)
+{
+	struct ch341_device *dev = urb->context;
+
+	if (!urb->status) {
+		/* Data is 8 bytes. Byte 0 might be the length of
+		 * significant data, which is 3 more bytes. Bytes 1
+		 * and 2, and possibly 3, are the pin status. The byte
+		 * order is different than for the GET_STATUS
+		 * command. Byte 1 is GPIOs 8 to 15, and byte 2 is
+		 * GPIOs 0 to 7.
+		 *
+		 * Something like this (with locking?) could be done,
+		 * but there's nothing to retrieve that info without
+		 * doing another USB read:
+		 *
+		 *   dev->gpio_last_read = be16_to_cpu(*(u16 *)&dev->gpio_buf_intr[1]);
+		 */
+
+		handle_nested_irq(dev->gpio_irq.num);
+	}
+
+	usb_submit_urb(dev->gpio_irq.urb, GFP_ATOMIC);
+}
+
+static int ch341_gpio_irq_set_type(struct irq_data *data, u32 type)
+{
+	struct ch341_device *dev = irq_data_get_irq_chip_data(data);
+
+	if (data->irq != dev->gpio_irq.num || type != IRQ_TYPE_EDGE_RISING)
+		return -EINVAL;
+
+	return 0;
+}
+
+static void ch341_gpio_irq_enable(struct irq_data *data)
+{
+	struct ch341_device *dev = irq_data_get_irq_chip_data(data);
+
+	/* Is that needed? */
+	if (dev->gpio_irq.enabled)
+		return;
+
+	dev->gpio_irq.enabled = true;
+	usb_submit_urb(dev->gpio_irq.urb, GFP_ATOMIC);
+}
+
+static void ch341_gpio_irq_disable(struct irq_data *data)
+{
+	struct ch341_device *dev = irq_data_get_irq_chip_data(data);
+
+	/* Is that needed? */
+	if (!dev->gpio_irq.enabled)
+		return;
+
+	dev->gpio_irq.enabled = false;
+	usb_kill_urb(dev->gpio_irq.urb);
+}
+
+/* Convert the GPIO index to the IRQ number */
+static int ch341_gpio_to_irq(struct gpio_chip *chip, unsigned int offset)
+{
+	struct ch341_device *dev = gpiochip_get_data(chip);
+
+	if (offset != CH341_GPIO_INT_LINE)
+		return -ENXIO;
+
+	return dev->gpio_irq.num;
+}
+
+/* Allocate a software driven IRQ, for GPIO 10 */
+static int ch341_gpio_get_irq(struct ch341_device *dev)
+{
+	int rc;
+
+	dev->gpio_irq.irq.name = dev->gpio_irq.name;
+	dev->gpio_irq.irq.irq_set_type = ch341_gpio_irq_set_type;
+	dev->gpio_irq.irq.irq_enable = ch341_gpio_irq_enable;
+	dev->gpio_irq.irq.irq_disable = ch341_gpio_irq_disable;
+
+	rc = irq_alloc_desc(0);
+	if (rc < 0) {
+		dev_err(&dev->usb_dev->dev, "Cannot allocate an IRQ desc");
+		return rc;
+	}
+
+	dev->gpio_irq.num = rc;
+	dev->gpio_irq.enabled = false;
+
+	irq_set_chip_data(dev->gpio_irq.num, dev);
+	irq_set_chip_and_handler(dev->gpio_irq.num, &dev->gpio_irq.irq,
+				 handle_simple_irq);
+
+	return 0;
+}
+
 void ch341_gpio_remove(struct ch341_device *dev)
 {
 	if (!dev->gpio_init)
 		return;
 
+	usb_kill_urb(dev->gpio_irq.urb);
+	usb_free_urb(dev->gpio_irq.urb);
+
 	gpiochip_remove(&dev->gpio);
+	irq_free_desc(dev->gpio_irq.num);
 }
 
 int ch341_gpio_init(struct ch341_device *dev)
 {
 	struct gpio_chip *gpio = &dev->gpio;
-	int result;
+	int rc;
+
+	snprintf(dev->gpio_irq.name, sizeof(dev->gpio_irq.name),
+		 "ch341-%s-gpio", dev_name(&dev->usb_dev->dev));
+	dev->gpio_irq.name[sizeof(dev->gpio_irq.name) - 1] = 0;
 
 	gpio->label = "ch341";
 	gpio->parent = &dev->usb_dev->dev;
@@ -224,18 +331,44 @@ int ch341_gpio_init(struct ch341_device *dev)
 	gpio->base = -1;
 	gpio->ngpio = CH341_GPIO_NUM_PINS;
 	gpio->can_sleep = true;
+	gpio->to_irq = ch341_gpio_to_irq;
 
 	dev->gpio_dir = 0;	/* All pins as input */
 
 	mutex_init(&dev->gpio_lock);
 
-	result = gpiochip_add_data(gpio, dev);
-	if (result) {
+	rc = ch341_gpio_get_irq(dev);
+	if (rc)
+		return rc;
+
+	rc = gpiochip_add_data(gpio, dev);
+	if (rc) {
 		dev_err(&dev->usb_dev->dev, "Could not add GPIO\n");
-		return result;
+		goto release_irq;
 	}
+
+	/* create an URB for handling interrupt */
+	dev->gpio_irq.urb = usb_alloc_urb(0, GFP_KERNEL);
+	if (!dev->gpio_irq.urb) {
+		dev_err(&dev->usb_dev->dev, "Cannot alloc the int URB");
+		rc = -ENOMEM;
+		goto release_gpio;
+	}
+
+	usb_fill_int_urb(dev->gpio_irq.urb, dev->usb_dev,
+			 usb_rcvintpipe(dev->usb_dev, dev->ep_intr),
+			 dev->gpio_irq.buf, CH341_USB_MAX_INTR_SIZE,
+			 ch341_complete_intr_urb, dev, dev->ep_intr_interval);
 
 	dev->gpio_init = true;
 
 	return 0;
+
+release_gpio:
+	gpiochip_remove(&dev->gpio);
+
+release_irq:
+	irq_free_descs(dev->gpio_irq.num, 1);
+
+	return rc;
 }

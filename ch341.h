@@ -26,6 +26,8 @@
  */
 #define CH341_SPI_NSEGS 4
 
+#define CH341_USB_MAX_INTR_SIZE 8
+
 struct ch341_device {
 	struct usb_device *usb_dev;
 	struct usb_interface *iface;
@@ -34,6 +36,7 @@ struct ch341_device {
 	int ep_in;
 	int ep_out;
 	int ep_intr;
+	u8 ep_intr_interval;
 
 	/* I2C */
 	struct i2c_adapter adapter;
@@ -52,6 +55,15 @@ struct ch341_device {
 	u16 gpio_last_read;	/* last GPIO values read */
 	u16 gpio_last_written;	/* last GPIO values written */
 	u8 gpio_buf[SEG_SIZE];
+
+	struct {
+		char name[32];
+		bool enabled;
+		struct irq_chip irq;
+		int num;
+		struct urb *urb;
+		u8 buf[CH341_USB_MAX_INTR_SIZE];
+	} gpio_irq;
 
 	/* SPI */
 	struct spi_master *master;

@@ -59,6 +59,8 @@ static int ch341_usb_probe(struct usb_interface *iface,
 
 	dev->ep_in = endpoints[0].desc.bEndpointAddress;
 	dev->ep_out = endpoints[1].desc.bEndpointAddress;
+	dev->ep_intr = endpoints[2].desc.bEndpointAddress;
+	dev->ep_intr_interval = endpoints[2].desc.bInterval;
 
 	usb_set_intfdata(iface, dev);
 

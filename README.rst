@@ -185,7 +185,7 @@ will report the device number to use for the other tools (run as root)::
 
   $ gpiodetect
   ...
-  gpiochip2 [ch341] (8 lines)
+  gpiochip2 [ch341] (16 lines)
 
   $ gpioinfo gpiochip2
   gpiochip2 - 16 lines:
@@ -211,6 +211,29 @@ when accessing the device. Use a more recent library. The `master`
 branch from the git tree works well::
 
   https://git.kernel.org/pub/scm/libs/libgpiod/libgpiod.git
+
+GPIO interrupt
+~~~~~~~~~~~~~~
+
+The INT pin, corresponding to GPIO 10 is an input pin that can trigger
+an interrupt on a rising edge. Only that pin is able to generate an
+interrupt, and only on a rising edge. Trying to monitor events on
+another GPIO, or that GPIO on something other than a rising edge, will
+be rejected.
+
+As an example, physically connect the INT pin to CS2. Start the
+monitoring of the INT pin:
+
+  $ gpiomon -r gpiochip2 10
+
+The INT will be triggered by setting CS2 low then high:
+
+  $ gpioset gpiochip2 2=0 && gpioset gpiochip2 2=1
+
+`gpiomon` will report rising events like this:
+
+  event:  RISING EDGE offset: 10 timestamp: [     191.539358302]
+  ...
 
 
 SPI
