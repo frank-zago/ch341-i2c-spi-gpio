@@ -33,6 +33,7 @@ struct ch341_device {
 
 	int ep_in;
 	int ep_out;
+	int ep_intr;
 
 	/* I2C */
 	struct i2c_adapter adapter;
@@ -47,9 +48,9 @@ struct ch341_device {
 	struct gpio_chip gpio;
 	struct mutex gpio_lock;
 	bool gpio_init;
-	u8 gpio_dir;		/* 1 bit per pin, 0=IN, 1=OUT. */
-	u8 gpio_last_read;	/* last GPIO values read */
-	u8 gpio_last_written;	/* last GPIO values written */
+	u16 gpio_dir;		/* 1 bit per pin, 0=IN, 1=OUT. */
+	u16 gpio_last_read;	/* last GPIO values read */
+	u16 gpio_last_written;	/* last GPIO values written */
 	u8 gpio_buf[SEG_SIZE];
 
 	/* SPI */

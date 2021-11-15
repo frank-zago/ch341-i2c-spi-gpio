@@ -152,7 +152,7 @@ The GPIOs
 ---------
 
 8 GPIOs are available on the CH341 A/B/F. The first 6 are input/output,
-and the last 2 are input only.
+and the last 10 are input only.
 
 Pinout and their names as they appear on some breakout boards::
 
@@ -167,6 +167,15 @@ Pinout and their names as they appear on some breakout boards::
    20             5     D5, MOSI, DOUT, SDO      input/output
    21             6     D6, DIN2                 input
    22             7     D7, MISO, DIN            input
+    5             8     ERR                      input
+    6             9     PEMP                     input
+    7            10     INT                      input
+    8            11     SLCT (SELECT)            input
+    ?            12     ?                        input
+   27            13     WT (WAIT)                input
+    4            14     DS (Data Select?)        input
+    3            15     AS (Address Select?)     input
+
 
 They can be used with the standard linux GPIO interface. Note that
 MOSI/MISO/SCK may be used by SPI, when SPI is enabled.
@@ -179,7 +188,7 @@ will report the device number to use for the other tools (run as root)::
   gpiochip2 [ch341] (8 lines)
 
   $ gpioinfo gpiochip2
-  gpiochip2 - 8 lines:
+  gpiochip2 - 16 lines:
           line   0:      unnamed       unused   input  active-high
           line   1:      unnamed       unused   input  active-high
           line   2:      unnamed       unused   input  active-high
@@ -188,6 +197,8 @@ will report the device number to use for the other tools (run as root)::
           line   5:      unnamed       unused   input  active-high
           line   6:      unnamed       unused   input  active-high
           line   7:      unnamed       unused   input  active-high
+	  [......]
+          line  15:      unnamed       unused   input  active-high
 
   $ gpioset gpiochip2 0=0 1=1 2=0
   $ gpioget gpiochip2 5

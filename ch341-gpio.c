@@ -17,8 +17,9 @@
 
 #include "ch341.h"
 
-#define CH341_GPIO_NUM_PINS         8     /* Number of GPIO pins */
+#define CH341_GPIO_NUM_PINS         16    /* Number of GPIO pins */
 
+#define CH341_PARA_CMD_STS          0xA0  /* Get pins status */
 #define CH341_CMD_UIO_STREAM        0xAB  /* UIO stream command */
 
 #define CH341_CMD_UIO_STM_IN        0x00  /* UIO interface IN command (D0~D7) */
@@ -29,7 +30,7 @@
 /* Masks to describe the 8 GPIOs (pins 15 to 22, a.k.a. D0 to D7.)
  * D0 to D5 can read/write, but pins D6 and D7 can only read.
  */
-static const u8 pin_can_output = 0b00111111;
+static const u16 pin_can_output = 0b00111111;
 
 static void ch341_gpio_dbg_show(struct seq_file *s, struct gpio_chip *chip)
 {
@@ -73,25 +74,29 @@ done:
 	return rc;
 }
 
+/* Read the GPIO line status. */
 static int read_inputs(struct ch341_device *dev)
 {
 	int result;
 
 	mutex_lock(&dev->gpio_lock);
 
-	dev->gpio_buf[0] = CH341_CMD_UIO_STREAM;
-	dev->gpio_buf[1] = CH341_CMD_UIO_STM_DIR | dev->gpio_dir;
-	dev->gpio_buf[2] = CH341_CMD_UIO_STM_IN;
-	dev->gpio_buf[3] = CH341_CMD_UIO_STM_END;
+	dev->gpio_buf[0] = CH341_PARA_CMD_STS;
 
-	result = gpio_transfer(dev, 4, 1);
+	result = gpio_transfer(dev, 1, 1);
 
-	if (result == 1)
-		dev->gpio_last_read = dev->gpio_buf[0];
+	/* The status command returns 6 bytes of data. Byte 0 has
+	 * status for lines 0 to 7, and byte 1 is lines 8 to 15. The
+	 * 3rd has the status for the SCL/SDA/SCK pins. The 4th byte
+	 * might have some remaining pin status. Byte 5 and 6 content
+	 * is unknown.
+	 */
+	if (result == 6)
+		dev->gpio_last_read = le16_to_cpu(*(u16 *)dev->gpio_buf);
 
 	mutex_unlock(&dev->gpio_lock);
 
-	return (result != 1) ? result : 0;
+	return (result != 6) ? result : 0;
 }
 
 static int ch341_gpio_get(struct gpio_chip *chip, unsigned int offset)
@@ -180,7 +185,7 @@ static int ch341_gpio_direction_output(struct gpio_chip *chip,
 				       unsigned int offset, int value)
 {
 	struct ch341_device *dev = gpiochip_get_data(chip);
-	u8 mask = BIT(offset);
+	u16 mask = BIT(offset);
 
 	if (!(pin_can_output & mask))
 		return -EINVAL;
