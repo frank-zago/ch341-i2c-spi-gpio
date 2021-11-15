@@ -46,7 +46,7 @@ static int ch341_usb_probe(struct usb_interface *iface,
 
 	if (iface->cur_altsetting->desc.bNumEndpoints != 3) {
 		rc = -EIO;
-		goto error;
+		goto free_dev;
 	}
 
 	endpoints = iface->cur_altsetting->endpoint;
@@ -54,7 +54,7 @@ static int ch341_usb_probe(struct usb_interface *iface,
 	    !usb_endpoint_is_bulk_out(&endpoints[1].desc) ||
 	    !usb_endpoint_xfer_int(&endpoints[2].desc)) {
 		rc = -EIO;
-		goto error;
+		goto free_dev;
 	}
 
 	dev->ep_in = endpoints[0].desc.bEndpointAddress;
@@ -64,7 +64,7 @@ static int ch341_usb_probe(struct usb_interface *iface,
 
 	rc = ch341_i2c_init(dev);
 	if (rc)
-		goto error;
+		goto free_dev;
 
 	rc = ch341_gpio_init(dev);
 	if (rc)
@@ -82,7 +82,8 @@ rem_gpio:
 rem_i2c:
 	ch341_i2c_remove(dev);
 
-error:
+free_dev:
+	usb_put_dev(dev->usb_dev);
 	kfree(dev);
 
 	return rc;
