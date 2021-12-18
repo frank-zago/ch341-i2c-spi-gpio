@@ -27,10 +27,10 @@
 #define CH341_CMD_UIO_STM_DIR       0x40  /* UIO interface DIR command (D0~D5) */
 #define CH341_CMD_UIO_STM_END       0x20  /* UIO interface END command */
 
-/* Masks to describe the 8 GPIOs (pins 15 to 22, a.k.a. D0 to D7.)
- * D0 to D5 can read/write, but pins D6 and D7 can only read.
+/* Masks to describe the 16 GPIOs. Pins D0 to D5 (mapped to GPIOs 0 to
+ * 5) can read/write, but the other pins can only read.
  */
-static const u16 pin_can_output = 0b00111111;
+static const u16 pin_can_output = 0b111111;
 
 /* Only GPIO 10 (INT# line) has hardware interrupt */
 #define CH341_GPIO_INT_LINE 10

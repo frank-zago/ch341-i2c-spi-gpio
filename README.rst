@@ -151,7 +151,7 @@ support that. This may be adressed in a future patch.
 The GPIOs
 ---------
 
-8 GPIOs are available on the CH341 A/B/F. The first 6 are input/output,
+16 GPIOs are available on the CH341 A/B/F. The first 6 are input/output,
 and the last 10 are input only.
 
 Pinout and their names as they appear on some breakout boards::
