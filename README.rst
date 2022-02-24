@@ -258,7 +258,7 @@ user device (spidev) at CS 1:
 After these command, the GPIO lines will report:
 
   $ gpioinfo gpiochip2
-  gpiochip2 - 8 lines:
+  gpiochip2 - 16 lines:
           line   0:      unnamed        "CS0"  output  active-high [used]
           line   1:      unnamed        "CS1"  output  active-high [used]
           line   2:      unnamed       unused   input  active-high
@@ -267,6 +267,9 @@ After these command, the GPIO lines will report:
           line   5:      unnamed       "MOSI"  output  active-high [used]
           line   6:      unnamed       unused   input  active-high
           line   7:      unnamed       "MISO"   input  active-high [used]
+          line   8:      unnamed       unused   input  active-high
+          ...
+          line  15:      unnamed       unused   input  active-high
 
 To remove a device, echo its CS to 'delete_device'. The following will
 remove the spidev device created on CS 1 above:

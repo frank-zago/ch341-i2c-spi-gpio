@@ -39,9 +39,9 @@ static void ch341_gpio_dbg_show(struct seq_file *s, struct gpio_chip *chip)
 {
 	struct ch341_device *dev = gpiochip_get_data(chip);
 
-	seq_printf(s, "pin config  : %02x  (0=IN, 1=OUT)\n", dev->gpio_dir);
-	seq_printf(s, "last read   : %02x\n", dev->gpio_last_read);
-	seq_printf(s, "last written: %02x\n", dev->gpio_last_written);
+	seq_printf(s, "pin config  : %04x  (0=IN, 1=OUT)\n", dev->gpio_dir);
+	seq_printf(s, "last read   : %04x\n", dev->gpio_last_read);
+	seq_printf(s, "last written: %04x\n", dev->gpio_last_written);
 }
 
 /* Send a command and get a reply if requested */
