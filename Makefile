@@ -1,6 +1,6 @@
 PWD         := $(shell pwd)
 KVERSION    := $(shell uname -r)
-KERNEL_DIR   = /lib/modules/$(KVERSION)/build
+KERNEL_DIR  ?= /lib/modules/$(KVERSION)/build
 
 obj-m       := ch341-buses.o
 
