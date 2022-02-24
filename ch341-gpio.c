@@ -181,6 +181,8 @@ static int ch341_gpio_direction_input(struct gpio_chip *chip,
 
 	dev->gpio_dir &= ~BIT(offset);
 
+	write_outputs(dev);
+
 	return 0;
 }
 
