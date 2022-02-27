@@ -214,12 +214,12 @@ static int ch341_i2c_xfer(struct i2c_adapter *adapter, struct i2c_msg *msgs, int
 				      dev->i2c_buf, msgs[i].len, &actual, DEFAULT_TIMEOUT);
 
 		if (retval) {
-			mutex_lock(&dev->usb_lock);
+			mutex_unlock(&dev->usb_lock);
 			return retval;
 		}
 
 		if (actual != msgs[i].len) {
-			mutex_lock(&dev->usb_lock);
+			mutex_unlock(&dev->usb_lock);
 			return -EIO;
 		}
 
