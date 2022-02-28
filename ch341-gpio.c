@@ -381,7 +381,7 @@ release_gpio:
 	gpiochip_remove(&dev->gpio);
 
 release_irq:
-	irq_free_descs(dev->gpio_irq.num, 1);
+	irq_free_desc(dev->gpio_irq.num);
 
 	return rc;
 }
