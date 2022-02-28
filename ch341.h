@@ -62,6 +62,7 @@ struct ch341_device {
 		struct irq_chip irq;
 		int num;
 		struct urb *urb;
+		struct usb_anchor urb_out;
 		u8 buf[CH341_USB_MAX_INTR_SIZE];
 	} gpio_irq;
 

@@ -205,6 +205,7 @@ static int ch341_gpio_direction_output(struct gpio_chip *chip,
 static void ch341_complete_intr_urb(struct urb *urb)
 {
 	struct ch341_device *dev = urb->context;
+	int rc;
 
 	if (!urb->status) {
 		/* Data is 8 bytes. Byte 0 might be the length of
@@ -222,9 +223,13 @@ static void ch341_complete_intr_urb(struct urb *urb)
 		 */
 
 		handle_nested_irq(dev->gpio_irq.num);
-	}
 
-	usb_submit_urb(dev->gpio_irq.urb, GFP_ATOMIC);
+		rc = usb_submit_urb(dev->gpio_irq.urb, GFP_ATOMIC);
+		if (rc)
+			usb_unanchor_urb(dev->gpio_irq.urb);
+	} else {
+		usb_unanchor_urb(dev->gpio_irq.urb);
+	}
 }
 
 static int ch341_gpio_irq_set_type(struct irq_data *data, u32 type)
@@ -240,25 +245,29 @@ static int ch341_gpio_irq_set_type(struct irq_data *data, u32 type)
 static void ch341_gpio_irq_enable(struct irq_data *data)
 {
 	struct ch341_device *dev = irq_data_get_irq_chip_data(data);
-
-	/* Is that needed? */
-	if (dev->gpio_irq.enabled)
-		return;
+	int rc;
 
 	dev->gpio_irq.enabled = true;
-	usb_submit_urb(dev->gpio_irq.urb, GFP_ATOMIC);
+
+	/* The URB might have just been unlinked in
+	 * ch341_gpio_irq_disable, but the completion handler hasn't
+	 * been called yet.
+	 */
+	if (!usb_wait_anchor_empty_timeout(&dev->gpio_irq.urb_out, 5000))
+		usb_kill_anchored_urbs(&dev->gpio_irq.urb_out);
+
+	usb_anchor_urb(dev->gpio_irq.urb, &dev->gpio_irq.urb_out);
+	rc = usb_submit_urb(dev->gpio_irq.urb, GFP_ATOMIC);
+	if (rc)
+		usb_unanchor_urb(dev->gpio_irq.urb);
 }
 
 static void ch341_gpio_irq_disable(struct irq_data *data)
 {
 	struct ch341_device *dev = irq_data_get_irq_chip_data(data);
 
-	/* Is that needed? */
-	if (!dev->gpio_irq.enabled)
-		return;
-
 	dev->gpio_irq.enabled = false;
-	usb_kill_urb(dev->gpio_irq.urb);
+	usb_unlink_urb(dev->gpio_irq.urb);
 }
 
 /* Convert the GPIO index to the IRQ number */
@@ -303,7 +312,7 @@ void ch341_gpio_remove(struct ch341_device *dev)
 	if (!dev->gpio_init)
 		return;
 
-	usb_kill_urb(dev->gpio_irq.urb);
+	usb_kill_anchored_urbs(&dev->gpio_irq.urb_out);
 	usb_free_urb(dev->gpio_irq.urb);
 
 	gpiochip_remove(&dev->gpio);
@@ -361,6 +370,8 @@ int ch341_gpio_init(struct ch341_device *dev)
 			 usb_rcvintpipe(dev->usb_dev, dev->ep_intr),
 			 dev->gpio_irq.buf, CH341_USB_MAX_INTR_SIZE,
 			 ch341_complete_intr_urb, dev, dev->ep_intr_interval);
+
+	init_usb_anchor(&dev->gpio_irq.urb_out);
 
 	dev->gpio_init = true;
 
