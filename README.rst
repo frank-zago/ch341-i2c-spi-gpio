@@ -1,10 +1,10 @@
 WinChipHead (沁恒) CH341 linux driver for I2C / SPI and GPIO mode
-================================================================
+=================================================================
 
 The CH341 is declined in several flavors, and may support one or more
 of UART, SPI, I2C and GPIO, but not always simultaneously::
 
-  - CH341 A/B/F: UART, SPI, I2C and GPIO
+  - CH341 A/B/F: UART, Printer, SPI, I2C and GPIO
   - CH341 C/T: UART and I2C
   - CH341 H: SPI
 
@@ -13,10 +13,10 @@ depending on the USB PID::
 
   - 0x5523: UART mode, covered by the USB `ch341` serial driver
   - 0x5512: SPI/I2C/GPIO mode, covered by this ch341_buses driver
-  - 0x5584: some printer mode emulation (?) - no linux driver
+  - 0x5584: Parallel printer mode, covered by the USB `usblp` driver
 
-The 0x5512 PID is unfortunately also claimed in the linux kernels 5.10
-or above by the driver for the UART part, and will conflict with this
+From linux kernel 5.10 to 5.16, the 0x5512 PID was unfortunately also
+claimed by the driver for the UART part, and will conflict with this
 driver. Blacklisting that module or deleting it will solve that
 problem. In `/etc/modprobe.d/blacklist.conf`, add the following line
 to prevent loading of the serial driver::
@@ -40,7 +40,7 @@ jumpers.
 The black chip programmer with a ZIF socket will power the CH341 at
 3.3V if a jumper is set, but will only output 5V to the chips to be
 programmed, which is not always desirable. A hardware hack to use 3.3V
-everywhere, involving some soldering, is available there:
+everywhere, involving some soldering, is available there::
 
   https://eevblog.com/forum/repair/ch341a-serial-memory-programmer-power-supply-fix/
 
@@ -48,7 +48,7 @@ The ch341-buses driver has been tested with a CH341A, CH341B and
 CH341T.
 
 Some sample code for the CH341 is available at the manufacturer
-website:
+website::
 
   http://wch-ic.com/products/CH341.html
 
@@ -58,7 +58,7 @@ including datasheets.
   https://github.com/boseji/CH341-Store.git
 
 This driver is based on, merges, and expands the following
-pre-existing works:
+pre-existing works::
 
   https://github.com/gschorcht/spi-ch341-usb.git
   https://github.com/gschorcht/i2c-ch341-usb.git
@@ -143,9 +143,9 @@ at24 linux driver tries to write a byte at a time, and doesn't wait at
 all (or enough) between writes. Data corruption on writes does occur.
 
 The driver doesn't support detection of I2C device present on the
-bus. Apparently when a device is not present at a given adress, the
+bus. Apparently when a device is not present at a given address, the
 CH341 will return an extra byte of data, but the driver doesn't
-support that. This may be adressed in a future patch.
+support that. This may be addressed in a future patch.
 
 
 The GPIOs
@@ -222,11 +222,11 @@ another GPIO, or that GPIO on something other than a rising edge, will
 be rejected.
 
 As an example, physically connect the INT pin to CS2. Start the
-monitoring of the INT pin:
+monitoring of the INT pin::
 
   $ gpiomon -r gpiochip2 10
 
-The INT will be triggered by setting CS2 low then high:
+The INT will be triggered by setting CS2 low then high::
 
   $ gpioset gpiochip2 2=0 && gpioset gpiochip2 2=1
 
@@ -255,7 +255,7 @@ user device (spidev) at CS 1:
   $ echo "spi-nor 0" > /sys/class/spi_master/spi0/new_device
   $ echo "spidev 1" > /sys/class/spi_master/spi0/new_device
 
-After these command, the GPIO lines will report:
+After these command, the GPIO lines will report::
 
   $ gpioinfo gpiochip2
   gpiochip2 - 16 lines:
@@ -272,7 +272,7 @@ After these command, the GPIO lines will report:
           line  15:      unnamed       unused   input  active-high
 
 To remove a device, echo its CS to 'delete_device'. The following will
-remove the spidev device created on CS 1 above:
+remove the spidev device created on CS 1 above::
 
   $ echo "1" > /sys/class/spi_master/spi0/delete_device
 
