@@ -2,7 +2,7 @@
 /*
  * SPI interface for the CH341A and CH341B chips.
  *
- * Copyright 2021, Frank Zago
+ * Copyright 2022, Frank Zago
  * Copyright (c) 2017 Gunar Schorcht (gunar@schorcht.net)
  * Copyright (c) 2016 Tse Lun Bien
  * Copyright (c) 2014 Marco Gittler
@@ -44,10 +44,6 @@ static const struct spi_gpio spi_gpio_cs[CH341_SPI_MAX_NUM_DEVICES] = {
 	{ 1,  "CS1", GPIOD_OUT_HIGH },
 	{ 2,  "CS2", GPIOD_OUT_HIGH },
 	{ 4,  "CS3", GPIOD_OUT_HIGH } /* Only on CH341A/B, not H */
-};
-
-struct ch341_spi_priv {
-	struct ch341_device *ch341_dev;
 };
 
 static size_t cha341_spi_max_tx_size(struct spi_device *spi)
@@ -152,8 +148,7 @@ static unsigned int copy_from_device(u8 *rx_buf, const u8 *buf,
 static int ch341_spi_transfer_one_message(struct spi_master *master,
 					  struct spi_message *m)
 {
-	struct ch341_spi_priv *priv = spi_master_get_devdata(master);
-	struct ch341_device *dev = priv->ch341_dev;
+	struct ch341_device *dev = spi_master_get_devdata(master);
 	struct spi_device *spi = m->spi;
 	struct spi_client *client = &dev->spi_clients[spi->chip_select];
 	struct gpio_desc *cs;
@@ -357,12 +352,12 @@ static int remove_slave(struct ch341_device *dev, unsigned int cs)
  * parameters: the modalias and the chip select number. For instance
  * "spi-nor 0" or "spidev 1".
  */
-static ssize_t new_device_store(struct device *dev,
+static ssize_t new_device_store(struct device *mdev,
 				struct device_attribute *attr,
 				const char *buf, size_t count)
 {
-	struct spi_master *master = container_of(dev, struct spi_master, dev);
-	struct ch341_spi_priv *priv = spi_master_get_devdata(master);
+	struct spi_master *master = container_of(mdev, struct spi_master, dev);
+	struct ch341_device *dev = spi_master_get_devdata(master);
 	struct spi_board_info board_info = {
 		.mode = SPI_MODE_0,
 		.max_speed_hz = CH341_SPI_MAX_FREQ,
@@ -393,7 +388,7 @@ static ssize_t new_device_store(struct device *dev,
 	if (rc)
 		goto free_req;
 
-	rc = add_slave(priv->ch341_dev, &board_info);
+	rc = add_slave(dev, &board_info);
 	if (rc)
 		goto free_req;
 
@@ -410,12 +405,12 @@ free_req:
 /* sysfs entry to remove an existing device at a given chip select. It
  * takes a string with a single number. For instance "2".
  */
-static ssize_t delete_device_store(struct device *dev,
+static ssize_t delete_device_store(struct device *mdev,
 				   struct device_attribute *attr,
 				   const char *buf, size_t count)
 {
-	struct spi_master *master = container_of(dev, struct spi_master, dev);
-	struct ch341_spi_priv *priv = spi_master_get_devdata(master);
+	struct spi_master *master = container_of(mdev, struct spi_master, dev);
+	struct ch341_device *dev = spi_master_get_devdata(master);
 	int cs;
 	int rc;
 
@@ -423,7 +418,7 @@ static ssize_t delete_device_store(struct device *dev,
 	if (rc)
 		return rc;
 
-	rc = remove_slave(priv->ch341_dev, cs);
+	rc = remove_slave(dev, cs);
 	if (rc)
 		return rc;
 
@@ -452,19 +447,15 @@ void ch341_spi_remove(struct ch341_device *dev)
 int ch341_spi_init(struct ch341_device *dev)
 {
 	struct spi_master *master;
-	struct ch341_spi_priv *priv;
 	int rc;
 
-	dev->master = spi_alloc_master(&dev->iface->dev,
-				       sizeof(struct ch341_device *));
+	dev->master = spi_alloc_master(&dev->iface->dev, 0);
 	if (!dev->master)
 		return -ENOMEM;
 
-	master = dev->master;
 	mutex_init(&dev->spi_lock);
-
-	priv = spi_master_get_devdata(master);
-	priv->ch341_dev = dev;
+	master = dev->master;
+	spi_master_set_devdata(master, dev);
 
 	master->bus_num = -1;
 	master->num_chipselect = CH341_SPI_MAX_NUM_DEVICES;
