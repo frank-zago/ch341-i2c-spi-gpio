@@ -27,7 +27,9 @@ Mode selection is done at the hardware level by tying some
 pins. Breakout boards with one of the CH341 chip usually have one or
 more jumpers to select which mode they work on. At least one model
 (CJMCU-341) appears to need bridging some solder pads to select a
-different default.
+different default. Breakout boards also don't usually offer an option
+to configure the chip into printer mode; for that case, connect the
+SCL and SDA lines directly together.
 
 The various CH341 appear to be indistinguishable from the
 software. For instance the ch341-buses driver will present a GPIO
