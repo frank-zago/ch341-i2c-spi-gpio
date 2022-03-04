@@ -65,6 +65,10 @@ pre-existing works::
   https://github.com/gschorcht/spi-ch341-usb.git
   https://github.com/gschorcht/i2c-ch341-usb.git
 
+Warning: try not to yank the USB device out if it's being used. The
+linux subsystems gpio and spi may crash or leak resources. This is not
+a problem with the driver, but the subsystems themselves.
+
 
 Building the driver
 -------------------
