@@ -1,4 +1,4 @@
-WinChipHead (沁恒) CH341 linux driver for I2C / SPI and GPIO mode
+WinChipHead (沁恒) CH341 linux drivers for I2C / SPI and GPIO mode
 =================================================================
 
 The CH341 is declined in several flavors, and may support one or more
@@ -12,12 +12,12 @@ They work in 3 different modes, with only one being presented
 depending on the USB PID::
 
   - 0x5523: UART mode, covered by the USB `ch341` serial driver
-  - 0x5512: SPI/I2C/GPIO mode, covered by this ch341_buses driver
+  - 0x5512: SPI/I2C/GPIO mode, covered by this set of drivers
   - 0x5584: Parallel printer mode, covered by the USB `usblp` driver
 
 From linux kernel 5.10 to 5.16, the 0x5512 PID was unfortunately also
-claimed by the driver for the UART part, and will conflict with this
-driver. Blacklisting that module or deleting it will solve that
+claimed by the driver for the UART part, and will conflict with these
+drivers. Blacklisting that module or deleting it will solve that
 problem. In `/etc/modprobe.d/blacklist.conf`, add the following line
 to prevent loading of the serial driver::
 
@@ -32,7 +32,7 @@ to configure the chip into printer mode; for that case, connect the
 SCL and SDA lines directly together.
 
 The various CH341 appear to be indistinguishable from the
-software. For instance the ch341-buses driver will present a GPIO
+software. For instance the gpio-ch341 driver will present a GPIO
 interface for the CH341T although physical pins are not present, and
 the device will accept GPIO commands.
 
@@ -46,8 +46,7 @@ everywhere, involving some soldering, is available there::
 
   https://eevblog.com/forum/repair/ch341a-serial-memory-programmer-power-supply-fix/
 
-The ch341-buses driver has been tested with a CH341A, CH341B and
-CH341T.
+These drivers have been tested with a CH341A, CH341B and CH341T.
 
 Some sample code for the CH341 is available at the manufacturer
 website::
@@ -59,7 +58,7 @@ including datasheets.
 
   https://github.com/boseji/CH341-Store.git
 
-This driver is based on, merges, and expands the following
+This set of drivers is based on, merges, and expands the following
 pre-existing works::
 
   https://github.com/gschorcht/spi-ch341-usb.git
@@ -67,20 +66,29 @@ pre-existing works::
 
 Warning: try not to yank the USB device out if it's being used. The
 linux subsystems gpio and spi may crash or leak resources. This is not
-a problem with the driver, but the subsystems themselves.
+a problem with the drivers, but the subsystems themselves.
 
 
-Building the driver
--------------------
+Building the drivers
+--------------------
 
-The driver will build for the active kernel::
+The drivers will build for the active kernel::
 
   $ make
 
-This will create `ch341-buses.ko`, which can the be insmod'ed.
+This will create four drivers: `ch341-core.ko`, `gpio-ch341.ko`,
+`i2c-ch341.ko` and `spi-ch341.ko` which can then be insmod'ed, in that
+order.
 
-The driver has been tested with a linux kernel 5.11. It will also
-build for a linux kernel 5.14.
+This driver used to be in a single piece, called `ch341-buses.ko`.
+However since the goal is to upstream it, it was not possible to keep
+it as is.
+
+It is possibly to override the target kernel by setting the KDIR
+variable in the working environment, to point to a built kernel tree.
+
+These drivers have been tested with a linux kernel 6.2, and should
+still build for older kernels.
 
 Setup
 -----
@@ -96,7 +104,7 @@ might make a system unstable.
 
 The following is more safe. As root, create a group, add the user to
 the group and create a udev rule for that group that will bind to the
-devices recognized by the driver::
+devices recognized by the core driver::
 
   $ groupadd ch341
   $ adduser "$USER" ch341
@@ -147,12 +155,6 @@ pull-up value is too low (1500 ohms).
 i2c AT24 eeproms can be read but not programmed properly because the
 at24 linux driver tries to write a byte at a time, and doesn't wait at
 all (or enough) between writes. Data corruption on writes does occur.
-
-The driver doesn't support detection of I2C device present on the
-bus. Apparently when a device is not present at a given address, the
-CH341 will return an extra byte of data, but the driver doesn't
-support that. This may be addressed in a future patch.
-
 
 The GPIOs
 ---------
@@ -295,8 +297,8 @@ If all the devices are deleted, the SPI driver will release the SPI
 lines, which become available again for GPIO operations.
 
 
-Developing the driver
----------------------
+Developing the drivers
+----------------------
 
 This driver (and other USB drivers) can easily be developed and
 tested in a VM, using QEMU and virtme (available in some distributions or at
