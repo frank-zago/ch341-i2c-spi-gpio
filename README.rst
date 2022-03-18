@@ -148,12 +148,6 @@ i2c AT24 eeproms can be read but not programmed properly because the
 at24 linux driver tries to write a byte at a time, and doesn't wait at
 all (or enough) between writes. Data corruption on writes does occur.
 
-The driver doesn't support detection of I2C device present on the
-bus. Apparently when a device is not present at a given address, the
-CH341 will return an extra byte of data, but the driver doesn't
-support that. This may be addressed in a future patch.
-
-
 The GPIOs
 ---------
 
