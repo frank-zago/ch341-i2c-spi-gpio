@@ -256,10 +256,19 @@ driver will try to claim the SPI lines, plus one of the chip select.
 To instantiate a device, echo a command string to the device's sysfs
 'new_device' file. The command is the driver to use followed by the CS
 number. For instance, the following declares a flash memory at CS 0, and a
-user device (spidev) at CS 1:
+user device (spidev) at CS 1::
 
   $ echo "spi-nor 0" > /sys/class/spi_master/spi0/new_device
   $ echo "spidev 1" > /sys/class/spi_master/spi0/new_device
+
+Starting with the Linux kernel 5.15 or 5.16, the following steps are
+also needed for each added device for the /dev/spidevX entries to
+appear::
+
+    echo spidev > /sys/bus/spi/devices/spi0.0/driver_override
+    echo spi0.0 > /sys/bus/spi/drivers/spidev/bind
+
+Change spi0 and spi0.0 as appropriately.
 
 After these command, the GPIO lines will report::
 
