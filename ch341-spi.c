@@ -384,6 +384,10 @@ static ssize_t new_device_store(struct device *mdev,
 		goto free_req;
 
 	str = strsep(&req, " ");
+	if (str == NULL) {
+		rc = -EINVAL;
+		goto free_req;
+	}
 	rc = kstrtou16(str, 0, &board_info.chip_select);
 	if (rc)
 		goto free_req;
