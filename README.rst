@@ -258,8 +258,8 @@ To instantiate a device, echo a command string to the device's sysfs
 number. For instance, the following declares a flash memory at CS 0, and a
 user device (spidev) at CS 1::
 
-  $ echo "spi-nor 0" > /sys/class/spi_master/spi0/new_device
-  $ echo "spidev 1" > /sys/class/spi_master/spi0/new_device
+  $ echo "spidev 0" > /sys/class/spi_master/spi0/new_device
+  $ echo "spi-nor 1" > /sys/class/spi_master/spi0/new_device
 
 Starting with the Linux kernel 5.15 or 5.16, the following steps are
 also needed for each added device for the /dev/spidevX entries to
