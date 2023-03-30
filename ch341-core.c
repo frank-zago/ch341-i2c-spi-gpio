@@ -102,6 +102,7 @@ static const struct usb_device_id ch341_usb_table[] = {
 	{ USB_DEVICE(0x1a86, 0x5512) },
 	{ }
 };
+MODULE_DEVICE_TABLE(usb, ch341_usb_table);
 
 static struct usb_driver ch341_usb_driver = {
 	.name       = "ch341-buses",
