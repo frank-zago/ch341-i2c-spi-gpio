@@ -16,7 +16,6 @@
  * split, with up to 32-byte per segment.
  */
 #define SEG_SIZE 32
-#define SEG_COUNT 128
 
 /* Number of SPI devices the device can control */
 #define CH341_SPI_MAX_NUM_DEVICES 4
@@ -43,9 +42,8 @@ struct ch341_device {
 	bool i2c_init;
 
 	/* I2C request and response state */
-	int idx_out;		/* current offset in buf */
-	int out_seg;		/* current segment */
-	u8 i2c_buf[SEG_COUNT * SEG_SIZE];
+    u8 i2c_inbuf[SEG_SIZE];
+    u8 i2c_outbuf[SEG_SIZE];
 
 	/* GPIO */
 	struct gpio_chip gpio;
