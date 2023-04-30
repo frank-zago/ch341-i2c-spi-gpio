@@ -152,10 +152,6 @@ Caveats
 The ch341 doesn't work with a Wii nunchuk, possibly because the
 pull-up value is too low (1500 ohms).
 
-i2c AT24 eeproms can be read but not programmed properly because the
-at24 linux driver tries to write a byte at a time, and doesn't wait at
-all (or enough) between writes. Data corruption on writes does occur.
-
 The GPIOs
 ---------
 
