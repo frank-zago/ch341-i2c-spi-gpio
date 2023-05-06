@@ -255,8 +255,8 @@ driver will try to claim the SPI lines, plus one of the chip select.
 
 To instantiate a device, echo a command string to the device's sysfs
 'new_device' file. The command is the driver to use followed by the CS
-number. For instance, the following declares a flash memory at CS 0, and a
-user device (spidev) at CS 1::
+number. For instance, the following declares a user device (spidev) at
+CS 0, and a flash memory at CS 1::
 
   $ echo "spidev 0" > /sys/class/spi_master/spi0/new_device
   $ echo "spi-nor 1" > /sys/class/spi_master/spi0/new_device
@@ -268,7 +268,7 @@ appear::
     echo spidev > /sys/bus/spi/devices/spi0.0/driver_override
     echo spi0.0 > /sys/bus/spi/drivers/spidev/bind
 
-Change spi0 and spi0.0 as appropriately.
+Change spi0 and spi0.0 as appropriate.
 
 After these command, the GPIO lines will report::
 
