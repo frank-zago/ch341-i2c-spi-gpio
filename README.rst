@@ -293,3 +293,24 @@ remove the spidev device created on CS 1 above::
 
 If all the devices are deleted, the SPI driver will release the SPI
 lines, which become available again for GPIO operations.
+
+
+Developing the driver
+---------------------
+
+This driver (and other USB drivers) can easily be developed and
+tested in a VM, using QEMU and virtme (available in some distributions or at
+https://git.kernel.org/cgit/utils/kernel/virtme/virtme.git/).
+
+The following command will boot a VM under 10 seconds with any CH341
+in I2C mode passed through::
+
+  virtme-run --pwd --installed-kernel --qemu-opts -usb -device usb-host,vendorid=0x1a86,productid=0x5512
+
+Build the VM on the host, but test the module in the VM. Add
+the --rwdir option to be able to write files to the host. Type `ctrl-a x`
+to exit the VM.
+
+The amount of loaded drivers is going to be minimal. More modules may
+need to be loaded, such as i2c-dev, spi-nor or mtd, depending on
+usage.
