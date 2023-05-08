@@ -157,6 +157,8 @@ static int ch341_spi_transfer_one_message(struct spi_master *master,
 	unsigned int tx_len = 0;
 	unsigned int buf_idx = 0;
 	int status;
+	struct spi_transfer *last_xfer;
+	struct spi_message *next_msg;
 
 	if (spi->mode & SPI_NO_CS) {
 		cs = NULL;
@@ -176,7 +178,14 @@ static int ch341_spi_transfer_one_message(struct spi_master *master,
 	}
 
 	status = spi_transfer(dev, client->buf, buf_idx, buf_idx - tx_len);
-	if (cs) {
+
+	last_xfer = list_last_entry(&m->transfers,
+					struct spi_transfer, transfer_list);
+	next_msg = spi_get_next_queued_message(master);
+	if (next_msg && next_msg->spi != m->spi)
+		next_msg = NULL;
+
+	if (cs && !last_xfer->cs_change && next_msg) {
 		if (spi->mode & SPI_CS_HIGH)
 			gpiod_set_value_cansleep(cs, 0);
 		else
