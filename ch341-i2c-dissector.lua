@@ -57,7 +57,8 @@ local usb_direction = Field.new("usb.endpoint_address.direction")
 local usb_transfer_type = Field.new("usb.transfer_type")
 
 -- Segment commands
-local PARA_STS    = 0xa0
+local PARA_STATUS = 0xa0
+local PARA_SET_CFG = 0xa1
 local PARA_CMD_W0 = 0xa6
 local PARA_CMD_W1 = 0xa7
 local SPI_STREAM  = 0xa8
@@ -196,6 +197,62 @@ function para_status(buffer, index, length, tree)
    tree:add(buffer(index, 1), "request pins status")
 end
 
+-- Decode GPIO pin filter. Which bytes are valid in the message.
+function gpio_cfg_filter(filter)
+   str = ""
+   if band(filter, 0x01) == 0x01 then
+      str = str .. "DATA[8..15] "
+   end
+
+   if band(filter, 0x02) == 0x02 then
+      str = str .. "DIR[8..15] "
+   end
+
+   if band(filter, 0x04) == 0x04 then
+      str = str .. "DATA[0..7] "
+   end
+
+   if band(filter, 0x08) == 0x08 then
+      str = str .. "DIR[0..7] "
+   end
+
+   if band(filter, 0x010) == 0x10 then
+      str = str .. "DATA[16..19] "
+   end
+
+   return str
+end
+
+function para_set_cfg(buffer, index, length, tree)
+   tree:add(buffer(index, 1), "set pins configuration")
+   length = length - 1
+   index = index + 1
+
+   -- Always 0x6a. 0x60 + 0xa?
+   tree:add(buffer(index, 1), "one byte of stuff")
+
+   length = length - 1
+   index = index + 1
+
+   tree:add(buffer(index, 1), "valid:" .. gpio_cfg_filter(buffer(index, 1):uint()))
+   length = length - 1
+   index = index + 1
+
+   tree:add(buffer(index, 1), "DATA[8..15]")
+   index = index + 1
+   tree:add(buffer(index, 1), "DIR[8..15]")
+   index = index + 1
+   tree:add(buffer(index, 1), "DATA[0..7]")
+   index = index + 1
+   tree:add(buffer(index, 1), "DIR[0..7]")
+   index = index + 1
+   tree:add(buffer(index, 1), "DATA[16..19]")
+   index = index + 1
+   length = length - 5
+
+   tree:add(buffer(index, length), "other stuff")
+end
+
 function uio_stream(buffer, index, length, tree)
    tree:add(buffer(index, 1), "UIO streaming start")
    length = length - 1
@@ -260,7 +317,8 @@ end
 
 local commands = {
    [I2C_STREAM]   = i2c_stream,
-   [PARA_STS]     = para_status,
+   [PARA_STATUS]  = para_status,
+   [PARA_SET_CFG] = para_set_cfg,
    [UIO_STREAM]   = uio_stream,
    [SPI_STREAM]   = spi_stream,
    [PARA_CMD_W0]  = para_stream,
