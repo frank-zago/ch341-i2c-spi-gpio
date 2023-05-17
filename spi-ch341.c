@@ -3,7 +3,7 @@
  * SPI interface for the CH341A and CH341B chips.
  * Devices are attached as children of the CH341 GPIO driver devices.
  *
- * Copyright 2022, Frank Zago
+ * Copyright 2023, Frank Zago
  * Copyright (c) 2017 Gunar Schorcht (gunar@schorcht.net)
  * Copyright (c) 2016 Tse Lun Bien
  * Copyright (c) 2014 Marco Gittler
@@ -36,12 +36,6 @@
 #define CH341_SPI_MAX_NUM_DEVICES 4
 
 /*
- * Number of segments in each SPI transfer buffer. The device will
- * crash if more than 4.
- */
-#define CH341_SPI_NSEGS 4
-
-/*
  * Pin configuration. The SPI interfaces may use up to 7 pins
  * allocated to GPIOs.
  */
@@ -59,7 +53,7 @@ struct ch341_spi {
 	struct spi_client {
 		struct spi_device *slave;
 		struct gpio_desc *gpio;
-		u8 buf[CH341_SPI_NSEGS * SEG_SIZE];
+		u8 *buf;
 	} spi_clients[CH341_SPI_MAX_NUM_DEVICES];
 
 	struct ch341_ddata *ch341;
@@ -79,16 +73,15 @@ static const struct spi_gpio spi_gpio_cs[CH341_SPI_MAX_NUM_DEVICES] = {
 	{ 4,  "CS3", GPIOD_OUT_HIGH } /* Only on CH341A/B, not H */
 };
 
-static size_t cha341_spi_max_tx_size(struct spi_device *spi)
+static size_t ch341_spi_max_xfer_size(struct spi_device *spi)
 {
-	return CH341_SPI_NSEGS * (SEG_SIZE - 1);
+	return SEG_SIZE - 1;
 }
 
-/* Send a command and get a reply if requested */
-static int spi_transfer(struct ch341_spi *dev, u8 *buf, int len, int nsegs)
+/* Send a command and get a reply */
+static int spi_transfer(struct ch341_spi *dev, u8 *buf, int len)
 {
 	struct ch341_ddata *ch341 = dev->ch341;
-	int sz_read = 0;
 	int actual;
 	int ret;
 
@@ -97,32 +90,18 @@ static int spi_transfer(struct ch341_spi *dev, u8 *buf, int len, int nsegs)
 	ret = usb_bulk_msg(ch341->usb_dev,
 			   usb_sndbulkpipe(ch341->usb_dev, ch341->ep_out),
 			   buf, len, &actual, DEFAULT_TIMEOUT_MS);
-	if (ret < 0)
-		goto out_unlock;
-
-	do {
+	if (!ret)
 		ret = usb_bulk_msg(ch341->usb_dev,
 				   usb_rcvbulkpipe(ch341->usb_dev, ch341->ep_in),
-				   &buf[sz_read], SEG_SIZE, &actual,
+				   buf, SEG_SIZE, &actual,
 				   DEFAULT_TIMEOUT_MS);
 
-		if (ret == 0)
-			sz_read += actual;
-
-		nsegs--;
-
-	} while (ret == 0 && nsegs);
-
-	if (ret == 0)
-		ret = sz_read;
-
-out_unlock:
 	mutex_unlock(&ch341->usb_lock);
 
-	return ret;
+	return ret ?: actual;
 }
 
-static void ch341_memcpy_bitswap(u8 *dest, const u8 *src, size_t n)
+static void ch341_memcpy_bitswap(u8 *dest, const u8 *src, int n)
 {
 	while (n--)
 		*dest++ = bitrev8(*src++);
@@ -132,107 +111,79 @@ static void ch341_memcpy_bitswap(u8 *dest, const u8 *src, size_t n)
  * Copy a TX buffer to the device buffer, adding the STREAM command as
  * needed.
  */
-static unsigned int copy_to_device(u8 *buf, unsigned int buf_idx,
-				   const u8 *tx_buf, unsigned int len, bool lsb)
+static void copy_to_device(u8 *buf, const u8 *tx_buf, int len, bool lsb)
 {
 	int to_copy;
 
-	while (len) {
-		if (buf_idx % SEG_SIZE == 0) {
-			buf[buf_idx] = CH341_CMD_SPI_STREAM;
-			buf_idx++;
-		}
+	buf[0] = CH341_CMD_SPI_STREAM;
+	to_copy = min(len, SEG_SIZE - 1); /* TODO: could len ever be too large? */
 
-		to_copy = min(len, SEG_SIZE - (buf_idx % SEG_SIZE));
-
-		if (tx_buf) {
-			if (lsb)
-				memcpy(&buf[buf_idx], tx_buf, to_copy);
-			else
-				ch341_memcpy_bitswap(&buf[buf_idx], tx_buf,
-						     to_copy);
-		} else {
-			memset(&buf[buf_idx], 0, to_copy);
-		}
-
-		len -= to_copy;
-		buf_idx += to_copy;
-		tx_buf += to_copy;
+	if (tx_buf) {
+		if (lsb)
+			memcpy(&buf[1], tx_buf, to_copy);
+		else
+			ch341_memcpy_bitswap(&buf[1], tx_buf, to_copy);
+	} else {
+		memset(&buf[1], 0, to_copy);
 	}
-
-	return buf_idx;
 }
 
 /* Copy from the device buffer to a receive buffer */
-static unsigned int copy_from_device(u8 *rx_buf, const u8 *buf,
-				     unsigned int buf_idx, unsigned int len,
-				     bool lsb)
+static void copy_from_device(u8 *rx_buf, const u8 *buf, int len, bool lsb)
 {
 	if (rx_buf) {
 		if (lsb)
-			memcpy(rx_buf, &buf[buf_idx], len);
+			memcpy(rx_buf, buf, len);
 		else
-			ch341_memcpy_bitswap(rx_buf, &buf[buf_idx], len);
+			ch341_memcpy_bitswap(rx_buf, buf, len);
 	}
+}
 
-	buf_idx += len;
+static void ch341_spi_set_cs(struct spi_device *spi, bool enable)
+{
+	struct ch341_spi *dev = spi_master_get_devdata(spi->master);
+	struct spi_client *client = &dev->spi_clients[spi->chip_select];
 
-	return buf_idx;
+	/*
+	 * The kernel documentation for set_cs() says this can be
+	 * called in interrupt context. Bail out, as we simply can't
+	 * use USB in that case. The next transfer will fail. But is
+	 * it really going to happen for this device?
+	 */
+	if (in_interrupt())
+		return;
+
+	/* Is that needed? */
+	if (spi->mode & SPI_NO_CS)
+		return;
+
+	gpiod_set_value_cansleep(client->gpio, enable);
 }
 
 /* Send a message */
-static int ch341_spi_transfer_one_message(struct spi_master *master,
-					  struct spi_message *m)
+static int ch341_spi_transfer_one(struct spi_master *master, struct spi_device *spi,
+				  struct spi_transfer *xfer)
 {
-	struct ch341_spi *dev = spi_master_get_devdata(master);
-	struct spi_device *spi = m->spi;
+	struct ch341_spi *dev = spi_master_get_devdata(spi->master);
 	struct spi_client *client = &dev->spi_clients[spi->chip_select];
 	bool lsb = spi->mode & SPI_LSB_FIRST;
-	struct spi_transfer *xfer;
-	unsigned int buf_idx = 0;
-	unsigned int tx_len = 0;
-	struct gpio_desc *cs;
 	int status;
 
-	if (spi->mode & SPI_NO_CS) {
-		cs = NULL;
-	} else {
-		cs = client->gpio;
+	copy_to_device(client->buf, xfer->tx_buf, xfer->len, lsb);
 
-		if (spi->mode & SPI_CS_HIGH)
-			gpiod_set_value_cansleep(cs, 1);
-		else
-			gpiod_set_value_cansleep(cs, 0);
-	}
-
-	list_for_each_entry(xfer, &m->transfers, transfer_list) {
-		buf_idx = copy_to_device(client->buf, buf_idx, xfer->tx_buf, xfer->len, lsb);
-
-		tx_len += xfer->len;
-	}
-
-	status = spi_transfer(dev, client->buf, buf_idx, buf_idx - tx_len);
-	if (cs) {
-		if (spi->mode & SPI_CS_HIGH)
-			gpiod_set_value_cansleep(cs, 0);
-		else
-			gpiod_set_value_cansleep(cs, 1);
-	}
-
+	status = spi_transfer(dev, client->buf, xfer->len + 1);
 	if (status >= 0) {
-		buf_idx = 0;
-		list_for_each_entry(xfer, &m->transfers, transfer_list)
-			buf_idx = copy_from_device(xfer->rx_buf, client->buf,
-						   buf_idx, xfer->len, lsb);
-
-		m->actual_length = tx_len;
-		status = 0;
+		if (status == xfer->len) {
+			copy_from_device(xfer->rx_buf, client->buf, xfer->len, lsb);
+			status = 0;
+		} else {
+			status = -EIO;
+		}
 	}
 
-	m->status = status;
-	spi_finalize_current_message(master);
+	spi_finalize_current_transfer(master);
 
-	return 0;
+	return status;
 }
 
 static void release_core_gpios(struct ch341_spi *dev)
@@ -477,8 +428,6 @@ static int ch341_spi_remove(struct platform_device *pdev)
 	for (cs = 0; cs < ARRAY_SIZE(dev->spi_clients); cs++)
 		remove_slave(dev, cs);
 
-	spi_unregister_master(dev->master);
-
 	return 0;
 }
 
@@ -493,8 +442,9 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	struct spi_master *master;
 	struct ch341_spi *dev;
 	int ret;
+	int i;
 
-	master = spi_alloc_master(&pdev->dev, sizeof(*dev));
+	master = devm_spi_alloc_master(&pdev->dev, sizeof(*dev));
 	if (!master)
 		return -ENOMEM;
 
@@ -504,12 +454,17 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	dev->ch341 = ch341;
 	platform_set_drvdata(pdev, dev);
 
+	for (i = 0; i < CH341_SPI_MAX_NUM_DEVICES; i++) {
+		dev->spi_clients[i].buf = devm_kzalloc(&pdev->dev, SEG_SIZE, GFP_KERNEL);
+		if (dev->spi_clients[i].buf == NULL)
+			return -ENOMEM;
+	}
+
 	/* Find the parent's gpiochip */
 	dev->gpiochip = gpiochip_find(pdev->dev.parent, match_gpiochip_parent);
 	if (!dev->gpiochip) {
 		dev_err(&master->dev, "Parent GPIO chip not found!\n");
-		ret = -ENODEV;
-		goto unreg_master;
+		return -ENODEV;
 	}
 
 	mutex_init(&dev->spi_lock);
@@ -519,20 +474,21 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	master->mode_bits = SPI_MODE_0 | SPI_LSB_FIRST;
 	master->flags = SPI_MASTER_MUST_RX | SPI_MASTER_MUST_TX;
 	master->bits_per_word_mask = SPI_BPW_MASK(8);
-	master->transfer_one_message = ch341_spi_transfer_one_message;
+	master->set_cs = ch341_spi_set_cs;
+	master->transfer_one = ch341_spi_transfer_one;
 	master->max_speed_hz = CH341_SPI_MAX_FREQ;
 	master->min_speed_hz = CH341_SPI_MIN_FREQ;
-	master->max_transfer_size = cha341_spi_max_tx_size;
-	master->max_message_size = cha341_spi_max_tx_size;
+	master->max_transfer_size = ch341_spi_max_xfer_size;
+	master->max_message_size = ch341_spi_max_xfer_size;
 
-	ret = spi_register_master(master);
+	ret = devm_spi_register_master(&pdev->dev, master);
 	if (ret)
-		goto unreg_master;
+		return ret;
 
 	ret = device_create_file(&master->dev, &dev_attr_new_device);
 	if (ret) {
 		dev_err(&master->dev, "Cannot create new_device file\n");
-		goto unreg_master;
+		return ret;
 	}
 
 	ret = device_create_file(&master->dev, &dev_attr_delete_device);
@@ -545,9 +501,6 @@ static int ch341_spi_probe(struct platform_device *pdev)
 
 del_new_device:
 	device_remove_file(&dev->master->dev, &dev_attr_new_device);
-
-unreg_master:
-	spi_master_put(master);
 
 	return ret;
 }
