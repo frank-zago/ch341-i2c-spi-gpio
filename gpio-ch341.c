@@ -24,6 +24,7 @@
 #include <linux/platform_device.h>
 #include <linux/types.h>
 #include <linux/usb.h>
+#include <linux/version.h>
 
 static const struct mfd_cell ch341_gpio_devs[] = {
 	{ .name = "ch341-spi", },
@@ -67,6 +68,38 @@ static const u16 pin_can_output = 0b111111;
 
 /* Only GPIO 10 (INT# line) has hardware interrupt */
 #define CH341_GPIO_INT_LINE 10
+
+/* this macro/inline function are available since linux 5.19 */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,19,0)
+
+static int gpiochip_irq_reqres(struct irq_data *d)
+{
+	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
+	return gpiochip_reqres_irq(gc, d->hwirq);
+}
+
+static void gpiochip_irq_relres(struct irq_data *d)
+{
+	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
+	gpiochip_relres_irq(gc, d->hwirq);
+}
+
+#  define	GPIOCHIP_IRQ_RESOURCE_HELPERS					\
+		.irq_request_resources  = gpiochip_irq_reqres,		\
+		.irq_release_resources  = gpiochip_irq_relres
+
+static inline void gpio_irq_chip_set_chip(struct gpio_irq_chip *girq,
+					  const struct irq_chip *chip)
+{
+	/* Yes, dropping const is ugly, but it isn't like we have a choice */
+	girq->chip = (struct irq_chip *)chip;
+}
+
+/* Flag not supported before 5.19 */
+#define IRQCHIP_IMMUTABLE 0
+
+#endif
+
 
 /* Send a command and get a reply if requested */
 static int gpio_transfer(struct ch341_gpio *dev, int out_len, int in_len)
