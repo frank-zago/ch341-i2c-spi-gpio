@@ -15,6 +15,7 @@
 #include <linux/platform_device.h>
 #include <linux/types.h>
 #include <linux/usb.h>
+#include <linux/version.h>
 
 /* I2C bus speed. Speed selection is not implemented. */
 #define CH341_I2C_20KHZ  0
@@ -249,6 +250,13 @@ static const struct i2c_adapter_quirks ch341_i2c_quirks = {
 	.max_read_len = MAX_RD_LENGTH,
 };
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,13,0)
+static void devm_i2c_del_adapter(void *adapter)
+{
+	i2c_del_adapter(adapter);
+}
+#endif
+
 static int ch341_i2c_probe(struct platform_device *pdev)
 {
 	struct ch341_ddata *ddata = dev_get_drvdata(pdev->dev.parent);
@@ -292,7 +300,15 @@ static int ch341_i2c_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,13,0)
 	return devm_i2c_add_adapter(&pdev->dev, &ch341_i2c->adapter);
+#else
+	ret = i2c_add_adapter(&ch341_i2c->adapter);
+	if (ret < 0)
+		return ret;
+
+	return devm_add_action_or_reset(&pdev->dev, devm_i2c_del_adapter, &ch341_i2c->adapter);
+#endif
 }
 
 static struct platform_driver ch341_i2c_driver = {
