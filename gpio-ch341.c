@@ -3,6 +3,7 @@
  * GPIO cell driver for the CH341A and CH341B chips.
  *
  * Copyright 2022, Frank Zago
+ * Copyright (c) 2023 Bernhard Guillon (Bernhard.Guillon@begu.org)
  * Copyright (c) 2017 Gunar Schorcht (gunar@schorcht.net)
  * Copyright (c) 2016 Tse Lun Bien
  * Copyright (c) 2014 Marco Gittler
@@ -34,11 +35,7 @@ static const struct mfd_cell ch341_gpio_devs[] = {
 
 /* GPIO chip commands */
 #define CH341_PARA_CMD_STS          0xA0  /* Get pins status */
-#define CH341_CMD_UIO_STREAM        0xAB  /* pin IO stream command */
-
-#define CH341_CMD_UIO_STM_OUT       0x80  /* pin IO interface OUT command (D0~D5) */
-#define CH341_CMD_UIO_STM_DIR       0x40  /* pin IO interface DIR command (D0~D5) */
-#define CH341_CMD_UIO_STM_END       0x20  /* pin IO interface END command */
+#define CH341_CMD_SET_OUTPUT        0xA1  /* pin IO interface */
 
 #define CH341_USB_MAX_INTR_SIZE 8
 
@@ -195,14 +192,19 @@ static void write_outputs(struct ch341_gpio *dev)
 {
 	mutex_lock(&dev->gpio_lock);
 
-	/* Only the first 6 lines can output. */
-	dev->gpio_buf[0] = CH341_CMD_UIO_STREAM;
-	dev->gpio_buf[1] = CH341_CMD_UIO_STM_DIR | (dev->gpio_dir & pin_can_output);
-	dev->gpio_buf[2] = CH341_CMD_UIO_STM_OUT |
-		(dev->gpio_last_written & dev->gpio_dir & pin_can_output);
-	dev->gpio_buf[3] = CH341_CMD_UIO_STM_END;
+	dev->gpio_buf[0] = CH341_CMD_SET_OUTPUT;
+	dev->gpio_buf[1] = 0x6a;
+	dev->gpio_buf[2] = 0x0c; // Keep the interface and only change the output pins D0-D5
+	dev->gpio_buf[3] = 0; // This affects the bits from 8 to 15 and we want to keep the interface therefore set to anything
+	dev->gpio_buf[4] = 0; // This affects the bits from 8 to 15 and we want to keep the interface therefore set to anything
+	dev->gpio_buf[5] = dev->gpio_last_written & dev->gpio_dir & pin_can_output & 0xff; // D5|D4|D3|D2|D1|D0 set to 1 -> output set to 0 -> input
+	dev->gpio_buf[6] = dev->gpio_dir & pin_can_output & 0xff; // D7|D6|D5|D4|D3|D2|D1|D0 set to 1 -> high active, set to 0 -> low active
+	dev->gpio_buf[7] = 0; // This affects the bits from 16-20 and we want to keep the interface, set to 1 -> output set to 0 input
+	dev->gpio_buf[8] = 0;
+	dev->gpio_buf[9] = 0;
+	dev->gpio_buf[10] = 0;
 
-	gpio_transfer(dev, 4, 0);
+	gpio_transfer(dev, 11, 0);
 
 	mutex_unlock(&dev->gpio_lock);
 }
