@@ -188,7 +188,7 @@ static int ch341_gpio_get_multiple(struct gpio_chip *chip,
 	return 0;
 }
 
-static void write_outputs(struct ch341_gpio* dev)
+static void write_outputs(struct ch341_gpio *dev)
 {
 	mutex_lock(&dev->gpio_lock);
 
