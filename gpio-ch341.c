@@ -196,7 +196,7 @@ static void write_outputs(struct ch341_gpio *dev)
 	dev->gpio_buf[1] = 0x6a;
 	dev->gpio_buf[2] = 0x0c; // Keep the interface and only change the output pins D0-D5
 	dev->gpio_buf[3] = 0; // This affects the bits from 8 to 15 and we want to keep the interface therefore set to anything
-	dev->gpio_buf[4] = 0; // This affects the bits from 8 to 15 and we want to keep the interface there fore set to anything
+	dev->gpio_buf[4] = 0; // This affects the bits from 8 to 15 and we want to keep the interface therefore set to anything
 	dev->gpio_buf[5] = dev->gpio_last_written & dev->gpio_dir & pin_can_output & 0xff; // D5|D4|D3|D2|D1|D0 set to 1 -> output set to 0 -> input
 	dev->gpio_buf[6] = dev->gpio_dir & pin_can_output & 0xff; // D7|D6|D5|D4|D3|D2|D1|D0 set to 1 -> high active, set to 0 -> low active
 	dev->gpio_buf[7] = 0; // This affects the bits from 16-20 and we want to keep the interface, set to 1 -> output set to 0 input
