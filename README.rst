@@ -127,6 +127,15 @@ The ch341 supports 4 different speeds: 20kHz, 100kHz, 400kHz and
 cannot be dynamically changed. It is possible to change it in the
 ch341_i2c_init() function. A future patch should address that issue.
 
+I2cdetect requires the i2c-dev module to be loaded. You can load it once::
+
+  $ modprobe i2c-dev
+
+Or add it to /etc/modules-load.d/ to autoload the module at boot time::
+
+  $ echo 'i2c-dev' > /etc/modules-load.d/i2c-dev.conf
+  $ systemctl restart systemd-modules-load.service
+
 To find the device number::
 
   $ i2cdetect -l
