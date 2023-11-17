@@ -31,7 +31,7 @@ static const struct mfd_cell ch341_gpio_devs[] = {
 	{ .name = "ch341-spi", },
 };
 
-#define CH341_GPIO_NUM_PINS         16    /* Number of GPIO pins */
+#define CH341_GPIO_NUM_PINS         20    /* Number of GPIO pins */
 
 /* GPIO chip commands */
 #define CH341_PARA_CMD_STS          0xA0  /* Get pins status */
@@ -42,9 +42,9 @@ static const struct mfd_cell ch341_gpio_devs[] = {
 struct ch341_gpio {
 	struct gpio_chip gpio;
 	struct mutex gpio_lock;
-	u16 gpio_dir;		/* 1 bit per pin, 0=IN, 1=OUT. */
+	u32 gpio_dir;		/* 1 bit per pin, 0=IN, 1=OUT. */
 	u16 gpio_last_read;	/* last GPIO values read */
-	u16 gpio_last_written;	/* last GPIO values written */
+	u32 gpio_last_written;	/* last GPIO values written */
 	union {
 		u8 *gpio_buf;
 		__le16 *gpio_buf_status;
@@ -58,10 +58,13 @@ struct ch341_gpio {
 };
 
 /*
- * Masks to describe the 16 GPIOs. Pins D0 to D5 (mapped to GPIOs 0 to
- * 5) can do input/output, but the other pins are input-only.
+ * Masks to describe the 20 (0-19) GPIOs.
+ * All pins exept pin 12 can output.
+ * Pins 16 to 20 can only be used as output.
+ * All other pins can be also used as inputs.
  */
-static const u16 pin_can_output = 0b111111;
+static const u32 pin_can_output = 0b11111110111111111111;
+static const u32 pin_can_input = 0b1111111111111111;
 
 /* Only GPIO 10 (INT# line) has hardware interrupt */
 #define CH341_GPIO_INT_LINE 10
@@ -194,12 +197,17 @@ static void write_outputs(struct ch341_gpio *dev)
 
 	dev->gpio_buf[0] = CH341_CMD_SET_OUTPUT;
 	dev->gpio_buf[1] = 0x6a;
-	dev->gpio_buf[2] = 0x0c; // Keep the interface and only change the output pins D0-D5
-	dev->gpio_buf[3] = 0; // This affects the bits from 8 to 15 and we want to keep the interface therefore set to anything
-	dev->gpio_buf[4] = 0; // This affects the bits from 8 to 15 and we want to keep the interface therefore set to anything
-	dev->gpio_buf[5] = dev->gpio_last_written & dev->gpio_dir & pin_can_output & 0xff; // D5|D4|D3|D2|D1|D0 set to 1 -> output set to 0 -> input
-	dev->gpio_buf[6] = dev->gpio_dir & pin_can_output & 0xff; // D7|D6|D5|D4|D3|D2|D1|D0 set to 1 -> high active, set to 0 -> low active
-	dev->gpio_buf[7] = 0; // This affects the bits from 16-20 and we want to keep the interface, set to 1 -> output set to 0 input
+	dev->gpio_buf[2] = 0x1f;
+	/* Set output Pins from 8 to 15 */
+	dev->gpio_buf[3] = (dev->gpio_last_written >> 8) & (dev->gpio_dir >> 8);
+	/* Set GPIO direction for pins from 8 to 15. Input = 0, output = 1 */
+	dev->gpio_buf[4] = dev->gpio_dir >> 8;
+	/* Set output Pins from 0 to 7 */
+	dev->gpio_buf[5] = dev->gpio_last_written & dev->gpio_dir;
+	/* Set GPIO direction for pins from 0 to 7. Input = 0, output = 1 */
+	dev->gpio_buf[6] = dev->gpio_dir;
+	/* Set output Pins from 16 to 19 */
+	dev->gpio_buf[7] = (dev->gpio_last_written & dev->gpio_dir) >> 16;
 	dev->gpio_buf[8] = 0;
 	dev->gpio_buf[9] = 0;
 	dev->gpio_buf[10] = 0;
@@ -243,6 +251,10 @@ static int ch341_gpio_direction_input(struct gpio_chip *chip,
 				      unsigned int offset)
 {
 	struct ch341_gpio *dev = gpiochip_get_data(chip);
+	u32 mask = BIT(offset);
+
+	if (!(pin_can_input & mask))
+		return -EINVAL;
 
 	dev->gpio_dir &= ~BIT(offset);
 
@@ -255,7 +267,7 @@ static int ch341_gpio_direction_output(struct gpio_chip *chip,
 				       unsigned int offset, int value)
 {
 	struct ch341_gpio *dev = gpiochip_get_data(chip);
-	u16 mask = BIT(offset);
+	u32 mask = BIT(offset);
 
 	if (!(pin_can_output & mask))
 		return -EINVAL;
@@ -360,6 +372,9 @@ static int ch341_gpio_probe(struct platform_device *pdev)
 	dev->irq_buf = devm_kzalloc(&pdev->dev, CH341_USB_MAX_INTR_SIZE, GFP_KERNEL);
 	if (dev->irq_buf == NULL)
 		return -ENOMEM;
+
+	/* Pins 16-19 can only be used as output */
+	dev->gpio_dir = 0xf0000;
 
 	platform_set_drvdata(pdev, dev);
 	dev->ddata = ddata;
