@@ -45,6 +45,7 @@ struct ch341_gpio {
 	u32 gpio_dir;		/* 1 bit per pin, 0=IN, 1=OUT. */
 	u16 gpio_last_read;	/* last GPIO values read */
 	u32 gpio_last_written;	/* last GPIO values written */
+	bool i2c_active;
 	union {
 		u8 *gpio_buf;
 		__le16 *gpio_buf_status;
@@ -193,11 +194,29 @@ static int ch341_gpio_get_multiple(struct gpio_chip *chip,
 
 static void write_outputs(struct ch341_gpio *dev)
 {
+	/*
+	 * Direction and data enable.
+	 * Bit 0: if set to 1, data out is enabled for bit 8 to 15
+	 * Bit 1: if set to 1, direction is enabled for bit 8 to 15
+	 * Bit 2: if set to 1, set data out is enabled for bit 0 to 7
+	 * Bit 3: if set to 1, set direction is enabled for bit 0 to 7
+	 * Bit 4: if set to 1, set data out is enabled for bit 16-19
+	 *
+	 * NOTE: there is no way to set the direction for bit 16 to 19
+	 *       if bit 4 is enabled the outputs are allways written.
+	 *       As 18 and 19 are used by the I2C driver we disable
+	 *       the data out for the bits 16 to 19. Otherwise
+	 *       writing to 16 or 17 will toggle 18 and 19 as well.
+	 */
+	u8 gpio_enable = 0x1f;
+	if(dev->i2c_active)
+		gpio_enable = 0x0f;
+
 	mutex_lock(&dev->gpio_lock);
 
 	dev->gpio_buf[0] = CH341_CMD_SET_OUTPUT;
 	dev->gpio_buf[1] = 0x6a;
-	dev->gpio_buf[2] = 0x1f;
+	dev->gpio_buf[2] = gpio_enable;
 	/* Set output Pins from 8 to 15 */
 	dev->gpio_buf[3] = (dev->gpio_last_written >> 8) & (dev->gpio_dir >> 8);
 	/* Set GPIO direction for pins from 8 to 15. Input = 0, output = 1 */
@@ -215,6 +234,23 @@ static void write_outputs(struct ch341_gpio *dev)
 	gpio_transfer(dev, 11, 0);
 
 	mutex_unlock(&dev->gpio_lock);
+}
+
+static bool i2c_active(struct gpio_chip *chip)
+{
+	/*
+	 * Use gpiochip_is_requestet as suggested in the manual
+	 * to find out if the I2C driver requested the I2C GPIOs.
+	 * https://www.kernel.org/doc/html/latest/driver-api/gpio/index.html
+	 * This function is for use by GPIO controller drivers.
+	 * The label can help with diagnostics, and knowing that the signal is
+	 * used as a GPIO can help avoid accidentally multiplexing
+	 * it to another controller.
+	 */
+	const char * scl = gpiochip_is_requested(chip, 18);
+	if(!scl)
+		return false;
+	return !strcmp("SCL", scl);
 }
 
 static void ch341_gpio_set(struct gpio_chip *chip, unsigned int offset, int value)
@@ -274,6 +310,7 @@ static int ch341_gpio_direction_output(struct gpio_chip *chip,
 
 	dev->gpio_dir |= mask;
 
+	dev->i2c_active = i2c_active(chip);
 	ch341_gpio_set(chip, offset, value);
 
 	return 0;
@@ -375,6 +412,8 @@ static int ch341_gpio_probe(struct platform_device *pdev)
 
 	/* Pins 16-19 can only be used as output */
 	dev->gpio_dir = 0xf0000;
+
+	dev->i2c_active = false;
 
 	platform_set_drvdata(pdev, dev);
 	dev->ddata = ddata;
