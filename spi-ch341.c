@@ -19,8 +19,15 @@
 #include <linux/spi/spi.h>
 #include <linux/types.h>
 #include <linux/usb.h>
+#include <linux/version.h>
 
 #include "ch341.h"
+
+/* Compatibility for older kernels. */
+#ifndef SPI_CONTROLLER_MUST_RX
+#define SPI_CONTROLLER_MUST_RX SPI_MASTER_MUST_RX
+#define SPI_CONTROLLER_MUST_TX SPI_MASTER_MUST_TX
+#endif
 
 /*
  * Only one frequency of about 1.5MHz, which could be the on-board
@@ -517,7 +524,7 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	master->bus_num = -1;
 	master->num_chipselect = CH341_SPI_MAX_NUM_DEVICES;
 	master->mode_bits = SPI_MODE_0 | SPI_LSB_FIRST;
-	master->flags = SPI_MASTER_MUST_RX | SPI_MASTER_MUST_TX;
+	master->flags = SPI_CONTROLLER_MUST_RX | SPI_CONTROLLER_MUST_TX;
 	master->bits_per_word_mask = SPI_BPW_MASK(8);
 	master->transfer_one_message = ch341_spi_transfer_one_message;
 	master->max_speed_hz = CH341_SPI_MAX_FREQ;
