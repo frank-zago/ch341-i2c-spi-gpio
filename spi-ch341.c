@@ -70,6 +70,9 @@ struct ch341_spi {
 	} spi_clients[CH341_SPI_MAX_NUM_DEVICES];
 
 	struct ch341_ddata *ch341;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,7,0)
+	struct gpio_device *gdev;
+#endif
 	struct gpio_chip *gpiochip;
 };
 
@@ -484,6 +487,10 @@ static int ch341_spi_remove(struct platform_device *pdev)
 	for (cs = 0; cs < ARRAY_SIZE(dev->spi_clients); cs++)
 		remove_slave(dev, cs);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,7,0)
+	gpio_device_put(dev->gdev);
+#endif
+
 	spi_unregister_master(dev->master);
 
 	return 0;
@@ -512,11 +519,21 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, dev);
 
 	/* Find the parent's gpiochip */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,7,0)
 	dev->gpiochip = gpiochip_find(pdev->dev.parent, match_gpiochip_parent);
+#else
+	dev->gdev = gpio_device_find(pdev->dev.parent, match_gpiochip_parent);
+	if (!dev->gdev) {
+		ret = -ENODEV;
+		goto unreg_master;
+	}
+
+	dev->gpiochip = gpio_device_get_chip(dev->gdev);
+#endif
 	if (!dev->gpiochip) {
 		dev_err(&master->dev, "Parent GPIO chip not found!\n");
 		ret = -ENODEV;
-		goto unreg_master;
+		goto put_gpio;
 	}
 
 	mutex_init(&dev->spi_lock);
@@ -534,12 +551,12 @@ static int ch341_spi_probe(struct platform_device *pdev)
 
 	ret = spi_register_master(master);
 	if (ret)
-		goto unreg_master;
+		goto put_gpio;
 
 	ret = device_create_file(&master->dev, &dev_attr_new_device);
 	if (ret) {
 		dev_err(&master->dev, "Cannot create new_device file\n");
-		goto unreg_master;
+		goto put_gpio;
 	}
 
 	ret = device_create_file(&master->dev, &dev_attr_delete_device);
@@ -553,7 +570,12 @@ static int ch341_spi_probe(struct platform_device *pdev)
 del_new_device:
 	device_remove_file(&dev->master->dev, &dev_attr_new_device);
 
+put_gpio:
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,7,0)
+	gpio_device_put(dev->gdev);
+
 unreg_master:
+#endif
 	spi_master_put(master);
 
 	return ret;
