@@ -1,7 +1,7 @@
 PWD := $(shell pwd)
 KVERSION    := $(shell uname -r)
 ifeq ($(KERNEL_SRC),) # KERNEL_SRC is set to kernel src dir in Yocto Linux build
-    KDIR    := /lib/modules/$(KVERSION)/build
+    KDIR    ?= /lib/modules/$(KVERSION)/build
 else
     KDIR    ?= $(KERNEL_SRC)
 endif
