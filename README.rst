@@ -90,6 +90,7 @@ variable in the working environment, to point to a built kernel tree.
 These drivers have been tested with a linux kernel 6.2, and should
 still build for older kernels.
 
+
 Setup
 -----
 
@@ -305,18 +306,24 @@ lines, which become available again for GPIO operations.
 Developing the drivers
 ----------------------
 
-This driver (and other USB drivers) can easily be developed and
-tested in a VM, using QEMU and virtme (available in some distributions or at
-https://git.kernel.org/cgit/utils/kernel/virtme/virtme.git/).
+This driver (and other USB drivers) can easily be developed and tested
+in a VM, using QEMU and virtme-ng (available in some distributions or
+at https://github.com/arighi/virtme-ng). The older virtme (at
+https://git.kernel.org/cgit/utils/kernel/virtme/virtme.git/) will not
+work with compressed modules.
 
 The following command will boot a VM under 10 seconds with any CH341
 in I2C mode passed through::
 
+  vng --run --force-9p --qemu-opts="-smp 2 -usb -device usb-host,vendorid=0x1a86,productid=0x5512"
+
+or with the original virtme::
+
   virtme-run --pwd --installed-kernel --qemu-opts -usb -device usb-host,vendorid=0x1a86,productid=0x5512
 
-Build the VM on the host, but test the module in the VM. Add
-the --rwdir option to be able to write files to the host. Type `ctrl-a x`
-to exit the VM.
+Build the module on the host, but test it in the VM. Add the --rwdir
+option to be able to write files to the host. Type `ctrl-a x` to exit
+the VM.
 
 The amount of loaded drivers is going to be minimal. More modules may
 need to be loaded, such as i2c-dev, spi-nor or mtd, depending on
