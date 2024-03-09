@@ -378,6 +378,15 @@ static int ch341_gpio_probe(struct platform_device *pdev)
 	gpio->set_multiple = ch341_gpio_set_multiple;
 	gpio->base = -1;
 	gpio->ngpio = CH341_GPIO_NUM_PINS;
+	gpio->names = (char const * const []){
+		"D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7",
+		// names are from "parallel" mode, seems to be what datasheets us
+		"ERR#", "PEMP", "INT#", "SLCT", "RST#", "WAIT#", "DS#", "AS#",
+		// names are from "print port" mode, seems to be what datasheets us
+		// "ERR#", "PEMP", "ACK#", "SLCT", "INI#", "BUSY", "AFD#", "SIN#",
+
+		// No WR#?
+	};
 	gpio->can_sleep = true;
 
 	girq = &gpio->irq;
