@@ -59,7 +59,7 @@ struct spi_gpio {
 };
 
 struct ch341_spi {
-	struct spi_master *master;
+	struct spi_controller *master;
 	struct mutex spi_lock;
 	u8 cs_allocated;    /* bitmask of allocated CS for SPI */
 	struct gpio_desc *spi_gpio_core_desc[3];
@@ -188,12 +188,12 @@ static unsigned int copy_from_device(u8 *rx_buf, const u8 *buf,
 }
 
 /* Send a message */
-static int ch341_spi_transfer_one_message(struct spi_master *master,
+static int ch341_spi_transfer_one_message(struct spi_controller *master,
 					  struct spi_message *m)
 {
-	struct ch341_spi *dev = spi_master_get_devdata(master);
+	struct ch341_spi *dev = spi_controller_get_devdata(master);
 	struct spi_device *spi = m->spi;
-	struct spi_client *client = &dev->spi_clients[spi->chip_select];
+	struct spi_client *client = &dev->spi_clients[spi_get_chipselect(spi, 0)];
 	bool lsb = spi->mode & SPI_LSB_FIRST;
 	struct spi_transfer *xfer;
 	unsigned int buf_idx = 0;
@@ -396,8 +396,8 @@ static ssize_t new_device_store(struct device *mdev,
 				struct device_attribute *attr,
 				const char *buf, size_t count)
 {
-	struct spi_master *master = container_of(mdev, struct spi_master, dev);
-	struct ch341_spi *dev = spi_master_get_devdata(master);
+	struct spi_controller *master = container_of(mdev, struct spi_controller, dev);
+	struct ch341_spi *dev = spi_controller_get_devdata(master);
 	struct spi_board_info board_info = {
 		.mode = SPI_MODE_0,
 		.max_speed_hz = CH341_SPI_MAX_FREQ,
@@ -454,8 +454,8 @@ static ssize_t delete_device_store(struct device *mdev,
 				   struct device_attribute *attr,
 				   const char *buf, size_t count)
 {
-	struct spi_master *master = container_of(mdev, struct spi_master, dev);
-	struct ch341_spi *dev = spi_master_get_devdata(master);
+	struct spi_controller *master = container_of(mdev, struct spi_controller, dev);
+	struct ch341_spi *dev = spi_controller_get_devdata(master);
 	int cs;
 	int ret;
 
@@ -497,7 +497,7 @@ static int match_gpiochip_parent(struct gpio_chip *gc, void *data)
 static int ch341_spi_probe(struct platform_device *pdev)
 {
 	struct ch341_ddata *ch341 = dev_get_drvdata(pdev->dev.parent->parent);
-	struct spi_master *master;
+	struct spi_controller *master;
 	struct ch341_spi *dev;
 	int ret;
 
@@ -505,14 +505,16 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	if (!master)
 		return -ENOMEM;
 
-	dev = spi_master_get_devdata(master);
+	dev = spi_controller_get_devdata(master);
 
 	dev->master = master;
 	dev->ch341 = ch341;
 	platform_set_drvdata(pdev, dev);
 
 	/* Find the parent's gpiochip */
-	dev->gpiochip = gpiochip_find(pdev->dev.parent, match_gpiochip_parent);
+	dev->gpiochip = gpio_device_get_chip(
+		gpio_device_find(pdev->dev.parent, match_gpiochip_parent)
+	);
 	if (!dev->gpiochip) {
 		dev_err(&master->dev, "Parent GPIO chip not found!\n");
 		ret = -ENODEV;
@@ -554,7 +556,7 @@ del_new_device:
 	device_remove_file(&dev->master->dev, &dev_attr_new_device);
 
 unreg_master:
-	spi_master_put(master);
+	spi_controller_put(master);
 
 	return ret;
 }
