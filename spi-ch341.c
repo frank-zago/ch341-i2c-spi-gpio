@@ -65,7 +65,6 @@ struct ch341_spi {
 	struct gpio_desc *sck, *mosi, *miso;
 	struct spi_client {
 		struct spi_device *slave;
-		struct gpio_desc *gpio;
 		u8 buf[CH341_SPI_NSEGS * SEG_SIZE];
 	} spi_clients[CH341_SPI_MAX_NUM_DEVICES];
 
@@ -207,7 +206,7 @@ static int ch341_spi_transfer_one_message(struct spi_controller *master,
 	if (spi->mode & SPI_NO_CS) {
 		cs = NULL;
 	} else {
-		cs = client->gpio;
+		cs = spi_get_csgpiod(spi, 0);
 
 		if (spi->mode & SPI_CS_HIGH)
 			gpiod_set_value_cansleep(cs, 1);
@@ -252,7 +251,6 @@ static int ch341_setup(struct spi_device *spi)
 	struct ch341_spi *dev = spi_controller_get_devdata(ctrl);
 	unsigned int cs = spi_get_chipselect(spi, 0);
 	struct spi_client *client;
-	struct gpio_desc *desc;
 	int ret;
 
 	// /* Sanity check */
@@ -273,7 +271,6 @@ static int ch341_setup(struct spi_device *spi)
 		gpiod_set_value_cansleep(dev->sck, 0);
 	}
 
-	client->gpio = spi_get_csgpiod(spi, 0);
 	dev->cs_allocated |= BIT(cs);
 
 	client->slave = spi;
@@ -283,7 +280,6 @@ static int ch341_setup(struct spi_device *spi)
 	return 0;
 
 release_cs:
-	client->gpio = NULL;
 	dev->cs_allocated &= ~BIT(cs);
 
 unlock:
