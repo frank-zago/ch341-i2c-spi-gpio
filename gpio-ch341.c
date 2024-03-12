@@ -27,10 +27,6 @@
 #include <linux/usb.h>
 #include <linux/version.h>
 
-static const struct mfd_cell ch341_gpio_devs[] = {
-	{ .name = "ch341-spi", },
-};
-
 #define CH341_GPIO_NUM_PINS         16    /* Number of GPIO pins */
 
 /* GPIO chip commands */
@@ -410,11 +406,6 @@ static int ch341_gpio_probe(struct platform_device *pdev)
 		usb_free_urb(dev->irq_urb);
 		return ret;
 	}
-
-	ret = mfd_add_hotplug_devices(&pdev->dev, ch341_gpio_devs,
-				     ARRAY_SIZE(ch341_gpio_devs));
-	if (ret)
-		dev_warn(&pdev->dev, "Failed to add mfd SPI device to gpio.");
 
 	return 0;
 }

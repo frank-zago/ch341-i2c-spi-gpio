@@ -310,7 +310,7 @@ static void ch341_cleanup(struct spi_device *spi)
 
 static int ch341_spi_probe(struct platform_device *pdev)
 {
-	struct ch341_ddata *ch341 = dev_get_drvdata(pdev->dev.parent->parent);
+	struct ch341_ddata *ch341 = dev_get_drvdata(pdev->dev.parent);
 	struct spi_controller *master;
 	struct ch341_spi *dev;
 	int ret;
