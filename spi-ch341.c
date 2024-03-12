@@ -281,19 +281,20 @@ static int request_core_gpios(struct ch341_spi *dev)
 }
 
 /* Add a new device, defined by the board_info. */
-static int add_slave(struct ch341_spi *dev, struct spi_board_info *board_info)
+static int ch341_setup(struct spi_device *spi)
 {
-	unsigned int cs = board_info->chip_select;
+	struct spi_controller *ctrl = spi->controller;
+	struct ch341_spi *dev = spi_controller_get_devdata(ctrl);
+	unsigned int cs = spi_get_chipselect(spi, 0);
 	struct spi_client *client;
 	struct gpio_desc *desc;
 	int ret;
 
-	/* Sanity check */
-	if (cs >= dev->master->num_chipselect)
-		return -EINVAL;
+	// /* Sanity check */
+	// if (cs >= dev->master->num_chipselect)
+	// 	return -EINVAL;
 
 	client = &dev->spi_clients[cs];
-	board_info->bus_num = dev->master->bus_num;
 
 	mutex_lock(&dev->spi_lock);
 
@@ -329,11 +330,7 @@ static int add_slave(struct ch341_spi *dev, struct spi_board_info *board_info)
 	client->gpio = desc;
 	dev->cs_allocated |= BIT(cs);
 
-	client->slave = spi_new_device(dev->master, board_info);
-	if (!client->slave) {
-		ret = -ENOMEM;
-		goto release_cs;
-	}
+	client->slave = spi;
 
 	mutex_unlock(&dev->spi_lock);
 
@@ -462,6 +459,7 @@ static int ch341_spi_probe(struct platform_device *pdev)
 
 	mutex_init(&dev->spi_lock);
 
+	master->setup = ch341_setup;
 	master->bus_num = -1;
 	master->num_chipselect = CH341_SPI_MAX_NUM_DEVICES;
 	master->mode_bits = SPI_MODE_0 | SPI_LSB_FIRST;
@@ -483,7 +481,7 @@ static int ch341_spi_probe(struct platform_device *pdev)
 			.max_speed_hz = CH341_SPI_MAX_FREQ,
 		};
 		board_info.chip_select = i;
-		add_slave(dev, &board_info);
+		spi_new_device(master, &board_info);
 	}
 
 	return 0;
