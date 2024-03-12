@@ -388,65 +388,6 @@ static int remove_slave(struct ch341_spi *dev, unsigned int cs)
 }
 
 /*
- * sysfs entry to add a new device. It takes a string with 2
- * parameters: the modalias and the chip select number. For instance
- * "spi-nor 0" or "spidev 1".
- */
-static ssize_t new_device_store(struct device *mdev,
-				struct device_attribute *attr,
-				const char *buf, size_t count)
-{
-	struct spi_controller *master = container_of(mdev, struct spi_controller, dev);
-	struct ch341_spi *dev = spi_controller_get_devdata(master);
-	struct spi_board_info board_info = {
-		.mode = SPI_MODE_0,
-		.max_speed_hz = CH341_SPI_MAX_FREQ,
-	};
-	char *req_org;
-	char *req;
-	char *str;
-	int ret;
-
-	req_org = kstrdup(buf, GFP_KERNEL);
-	if (!req_org)
-		return -ENOMEM;
-
-	req = req_org;
-
-	str = strsep(&req, " ");
-	if (str == NULL) {
-		ret = -EINVAL;
-		goto free_req;
-	}
-
-	ret = strscpy(board_info.modalias, str, sizeof(board_info.modalias));
-	if (ret < 0)
-		goto free_req;
-
-	str = strsep(&req, " ");
-	if (str == NULL) {
-		ret = -EINVAL;
-		goto free_req;
-	}
-	ret = kstrtou16(str, 0, &board_info.chip_select);
-	if (ret)
-		goto free_req;
-
-	ret = add_slave(dev, &board_info);
-	if (ret)
-		goto free_req;
-
-	kfree(req_org);
-
-	return count;
-
-free_req:
-	kfree(req_org);
-
-	return ret;
-}
-
-/*
  * sysfs entry to remove an existing device at a given chip select. It
  * takes a string with a single number. For instance "2".
  */
@@ -470,7 +411,6 @@ static ssize_t delete_device_store(struct device *mdev,
 	return count;
 }
 
-static DEVICE_ATTR_WO(new_device);
 static DEVICE_ATTR_WO(delete_device);
 
 static int ch341_spi_remove(struct platform_device *pdev)
@@ -478,7 +418,6 @@ static int ch341_spi_remove(struct platform_device *pdev)
 	struct ch341_spi *dev = platform_get_drvdata(pdev);
 	int cs;
 
-	device_remove_file(&dev->master->dev, &dev_attr_new_device);
 	device_remove_file(&dev->master->dev, &dev_attr_delete_device);
 
 	for (cs = 0; cs < ARRAY_SIZE(dev->spi_clients); cs++)
@@ -538,22 +477,16 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	if (ret)
 		goto unreg_master;
 
-	ret = device_create_file(&master->dev, &dev_attr_new_device);
-	if (ret) {
-		dev_err(&master->dev, "Cannot create new_device file\n");
-		goto unreg_master;
-	}
-
-	ret = device_create_file(&master->dev, &dev_attr_delete_device);
-	if (ret) {
-		dev_err(&master->dev, "Cannot create delete_device file\n");
-		goto del_new_device;
+	for (int i=0; i < master->num_chipselect; i++) {
+		struct spi_board_info board_info = {
+			.mode = SPI_MODE_0,
+			.max_speed_hz = CH341_SPI_MAX_FREQ,
+		};
+		board_info.chip_select = i;
+		add_slave(dev, &board_info);
 	}
 
 	return 0;
-
-del_new_device:
-	device_remove_file(&dev->master->dev, &dev_attr_new_device);
 
 unreg_master:
 	spi_controller_put(master);
