@@ -366,7 +366,7 @@ static int ch341_gpio_probe(struct platform_device *pdev)
 	mutex_init(&dev->gpio_lock);
 
 	gpio = &dev->gpio;
-	gpio->label = dev_name(&pdev->dev);
+	gpio->label = "ch341";
 	gpio->parent = &pdev->dev;
 	gpio->owner = THIS_MODULE;
 	gpio->get_direction = ch341_gpio_get_direction;

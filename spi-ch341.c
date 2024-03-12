@@ -79,11 +79,15 @@ static const struct spi_gpio spi_gpio_core[] = {
 	{ 7,  "MISO", GPIOD_IN }
 };
 
-static const struct spi_gpio spi_gpio_cs[CH341_SPI_MAX_NUM_DEVICES] = {
-	{ 0,  "CS0", GPIOD_OUT_HIGH },
-	{ 1,  "CS1", GPIOD_OUT_HIGH },
-	{ 2,  "CS2", GPIOD_OUT_HIGH },
-	{ 4,  "CS3", GPIOD_OUT_HIGH } /* Only on CH341A/B, not H */
+static struct gpiod_lookup_table gpios_table = {
+       .dev_id = NULL,
+       .table = {
+               GPIO_LOOKUP_IDX("ch341",  0,  "cs", 0, GPIOD_OUT_HIGH),
+               GPIO_LOOKUP_IDX("ch341",  1,  "cs", 1, GPIOD_OUT_HIGH),
+               GPIO_LOOKUP_IDX("ch341",  2,  "cs", 2, GPIOD_OUT_HIGH),
+               GPIO_LOOKUP_IDX("ch341",  4,  "cs", 3, GPIOD_OUT_HIGH), /* Only on CH341A/B, not H */
+               { }
+       }
 };
 
 static size_t cha341_spi_max_tx_size(struct spi_device *spi)
@@ -313,21 +317,7 @@ static int ch341_setup(struct spi_device *spi)
 		gpiod_set_value_cansleep(dev->spi_gpio_core_desc[0], 0);
 	}
 
-	/* Allocate the CS GPIO */
-	desc = gpiochip_request_own_desc(dev->gpiochip,
-					 spi_gpio_cs[cs].hwnum,
-					 spi_gpio_cs[cs].label,
-					 GPIO_LOOKUP_FLAGS_DEFAULT,
-					 spi_gpio_cs[cs].dflags);
-	if (IS_ERR(desc)) {
-		dev_warn(&dev->master->dev,
-			 "Unable to reserve GPIO %s for SPI\n",
-			 spi_gpio_cs[cs].label);
-		ret = PTR_ERR(desc);
-		goto unreg_core_gpios;
-	}
-
-	client->gpio = desc;
+	client->gpio = spi_get_csgpiod(spi, 0);
 	dev->cs_allocated |= BIT(cs);
 
 	client->slave = spi;
@@ -355,7 +345,7 @@ static int remove_slave(struct ch341_spi *dev, unsigned int cs)
 {
 	int ret;
 
-	if (cs >= ARRAY_SIZE(spi_gpio_cs))
+	if (cs >= dev->master->num_chipselect)
 		return -EINVAL;
 
 	mutex_lock(&dev->spi_lock);
@@ -470,10 +460,15 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	master->min_speed_hz = CH341_SPI_MIN_FREQ;
 	master->max_transfer_size = cha341_spi_max_tx_size;
 	master->max_message_size = cha341_spi_max_tx_size;
+	master->use_gpio_descriptors = true;
 
+    gpiod_add_lookup_table(&gpios_table);
 	ret = spi_register_master(master);
+	gpiod_remove_lookup_table(&gpios_table);
 	if (ret)
 		goto unreg_master;
+
+	
 
 	for (int i=0; i < master->num_chipselect; i++) {
 		struct spi_board_info board_info = {
