@@ -202,6 +202,8 @@ static int ch341_spi_transfer_one_message(struct spi_controller *master,
 	struct gpio_desc *cs;
 	int status;
 
+	// sure would be cool if we could just use spi_set_cs & all the gpio magic
+	// that comes with it
 	if (spi->mode & SPI_NO_CS) {
 		cs = NULL;
 	} else {
