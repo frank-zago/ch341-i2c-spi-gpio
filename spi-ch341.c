@@ -60,8 +60,6 @@ struct spi_gpio {
 
 struct ch341_spi {
 	struct spi_controller *master;
-	struct mutex spi_lock;
-	u8 cs_allocated;    /* bitmask of allocated CS for SPI */
 	struct gpio_desc *sck, *mosi, *miso;
 	struct spi_client {
 		struct spi_device *slave;
@@ -250,60 +248,12 @@ static int ch341_setup(struct spi_device *spi)
 	struct spi_controller *ctrl = spi->controller;
 	struct ch341_spi *dev = spi_controller_get_devdata(ctrl);
 	unsigned int cs = spi_get_chipselect(spi, 0);
-	struct spi_client *client;
-	int ret;
 
-	// /* Sanity check */
-	// if (cs >= dev->master->num_chipselect)
-	// 	return -EINVAL;
-
-	client = &dev->spi_clients[cs];
-
-	mutex_lock(&dev->spi_lock);
-
-	if (dev->cs_allocated & BIT(cs)) {
-		ret = -EADDRINUSE;
-		goto unlock;
-	}
-
-	if (dev->cs_allocated == 0) {
-		/* Set clock to low */
-		gpiod_set_value_cansleep(dev->sck, 0);
-	}
-
-	dev->cs_allocated |= BIT(cs);
+	struct spi_client *client = &dev->spi_clients[cs];
 
 	client->slave = spi;
 
-	mutex_unlock(&dev->spi_lock);
-
 	return 0;
-
-release_cs:
-	dev->cs_allocated &= ~BIT(cs);
-
-unlock:
-	mutex_unlock(&dev->spi_lock);
-
-	return ret;
-}
-
-static void ch341_cleanup(struct spi_device *spi)
-{
-	struct spi_controller *ctrl = spi->controller;
-	struct ch341_spi *dev = spi_controller_get_devdata(ctrl);
-	unsigned int cs = spi_get_chipselect(spi, 0);
-
-	if (cs >= dev->master->num_chipselect)
-		return;
-
-	mutex_lock(&dev->spi_lock);
-
-	if (dev->cs_allocated & BIT(cs)) {
-		dev->cs_allocated &= ~BIT(cs);
-	}
-
-	mutex_unlock(&dev->spi_lock);
 }
 
 static int ch341_spi_probe(struct platform_device *pdev)
@@ -323,10 +273,7 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	dev->ch341 = ch341;
 	platform_set_drvdata(pdev, dev);
 
-	mutex_init(&dev->spi_lock);
-
 	master->setup = ch341_setup;
-	master->cleanup = ch341_cleanup;
 	master->bus_num = -1;
 	master->num_chipselect = CH341_SPI_MAX_NUM_DEVICES;
 	master->mode_bits = SPI_MODE_0 | SPI_LSB_FIRST;
@@ -372,6 +319,9 @@ static int ch341_spi_probe(struct platform_device *pdev)
 		goto unregister_table;
 	}
 	gpiod_set_consumer_name(miso, "spi MISO");
+
+	/* Set clock to low */
+	gpiod_set_value_cansleep(dev->sck, 0);
 
 	for (int i=0; i < master->num_chipselect; i++) {
 		struct spi_board_info board_info = {
