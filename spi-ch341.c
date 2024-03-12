@@ -341,78 +341,31 @@ unlock:
 	return ret;
 }
 
-static int remove_slave(struct ch341_spi *dev, unsigned int cs)
+static void ch341_cleanup(struct spi_device *spi)
 {
-	int ret;
+	struct spi_controller *ctrl = spi->controller;
+	struct ch341_spi *dev = spi_controller_get_devdata(ctrl);
+	unsigned int cs = spi_get_chipselect(spi, 0);
 
 	if (cs >= dev->master->num_chipselect)
-		return -EINVAL;
+		return;
 
 	mutex_lock(&dev->spi_lock);
 
 	if (dev->cs_allocated & BIT(cs)) {
 		dev->cs_allocated &= ~BIT(cs);
 
-		spi_unregister_device(dev->spi_clients[cs].slave);
 		dev->spi_clients[cs].slave = NULL;
 
-		gpiochip_free_own_desc(dev->spi_clients[cs].gpio);
 		dev->spi_clients[cs].gpio = NULL;
 
 		if (dev->cs_allocated == 0) {
 			/* Last slave. Release the core GPIOs */
 			release_core_gpios(dev);
 		}
-
-		ret = 0;
-	} else {
-		ret = -ENODEV;
 	}
 
 	mutex_unlock(&dev->spi_lock);
-
-	return ret;
-}
-
-/*
- * sysfs entry to remove an existing device at a given chip select. It
- * takes a string with a single number. For instance "2".
- */
-static ssize_t delete_device_store(struct device *mdev,
-				   struct device_attribute *attr,
-				   const char *buf, size_t count)
-{
-	struct spi_controller *master = container_of(mdev, struct spi_controller, dev);
-	struct ch341_spi *dev = spi_controller_get_devdata(master);
-	int cs;
-	int ret;
-
-	ret = kstrtouint(buf, 0, &cs);
-	if (ret)
-		return ret;
-
-	ret = remove_slave(dev, cs);
-	if (ret)
-		return ret;
-
-	return count;
-}
-
-static DEVICE_ATTR_WO(delete_device);
-
-static int ch341_spi_remove(struct platform_device *pdev)
-{
-	struct ch341_spi *dev = platform_get_drvdata(pdev);
-	int cs;
-
-	device_remove_file(&dev->master->dev, &dev_attr_delete_device);
-
-	for (cs = 0; cs < ARRAY_SIZE(dev->spi_clients); cs++)
-		remove_slave(dev, cs);
-
-	spi_unregister_master(dev->master);
-
-	return 0;
 }
 
 static int match_gpiochip_parent(struct gpio_chip *gc, void *data)
@@ -427,7 +380,7 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	struct ch341_spi *dev;
 	int ret;
 
-	master = spi_alloc_master(&pdev->dev, sizeof(*dev));
+	master = devm_spi_alloc_master(&pdev->dev, sizeof(*dev));
 	if (!master)
 		return -ENOMEM;
 
@@ -443,13 +396,13 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	);
 	if (!dev->gpiochip) {
 		dev_err(&master->dev, "Parent GPIO chip not found!\n");
-		ret = -ENODEV;
-		goto unreg_master;
+		return -ENODEV;
 	}
 
 	mutex_init(&dev->spi_lock);
 
 	master->setup = ch341_setup;
+	master->cleanup = ch341_cleanup;
 	master->bus_num = -1;
 	master->num_chipselect = CH341_SPI_MAX_NUM_DEVICES;
 	master->mode_bits = SPI_MODE_0 | SPI_LSB_FIRST;
@@ -463,10 +416,10 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	master->use_gpio_descriptors = true;
 
     gpiod_add_lookup_table(&gpios_table);
-	ret = spi_register_master(master);
+	ret = devm_spi_register_master(&pdev->dev, master);
 	gpiod_remove_lookup_table(&gpios_table);
 	if (ret)
-		goto unreg_master;
+		return ret;
 
 	
 
@@ -479,18 +432,12 @@ static int ch341_spi_probe(struct platform_device *pdev)
 		spi_new_device(master, &board_info);
 	}
 
-	return 0;
-
-unreg_master:
-	spi_controller_put(master);
-
 	return ret;
 }
 
 static struct platform_driver ch341_spi_driver = {
 	.driver.name = "ch341-spi",
 	.probe	     = ch341_spi_probe,
-	.remove	     = ch341_spi_remove,
 };
 module_platform_driver(ch341_spi_driver);
 
