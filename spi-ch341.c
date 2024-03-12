@@ -62,7 +62,7 @@ struct ch341_spi {
 	struct spi_controller *master;
 	struct mutex spi_lock;
 	u8 cs_allocated;    /* bitmask of allocated CS for SPI */
-	struct gpio_desc *spi_gpio_core_desc[3];
+	struct gpio_desc *sck, *mosi, *miso;
 	struct spi_client {
 		struct spi_device *slave;
 		struct gpio_desc *gpio;
@@ -268,7 +268,7 @@ static int ch341_setup(struct spi_device *spi)
 
 	if (dev->cs_allocated == 0) {
 		/* Set clock to low */
-		gpiod_set_value_cansleep(dev->spi_gpio_core_desc[0], 0);
+		gpiod_set_value_cansleep(dev->sck, 0);
 	}
 
 	client->gpio = spi_get_csgpiod(spi, 0);
@@ -351,7 +351,7 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	gpios_table.dev_id = dev_name(&master->dev);
 
 	struct gpio_desc *sck, *mosi, *miso;
-	sck = devm_gpiod_get(&master->dev, "sck", GPIOD_OUT_HIGH);
+	dev->sck = sck = devm_gpiod_get(&master->dev, "sck", GPIOD_OUT_HIGH);
 	if (IS_ERR(sck)) {
 		dev_warn(&dev->master->dev, "Unable to reserve GPIO 'sck' for SPI\n");
 		ret = PTR_ERR(sck);
@@ -359,7 +359,7 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	}
 	gpiod_set_consumer_name(sck, "spi SCK");
 
-	mosi = devm_gpiod_get(&master->dev, "mosi", GPIOD_OUT_HIGH);
+	dev->mosi = mosi = devm_gpiod_get(&master->dev, "mosi", GPIOD_OUT_HIGH);
 	if (IS_ERR(mosi)) {
 		dev_warn(&dev->master->dev, "Unable to reserve GPIO 'mosi' for SPI\n");
 		ret = PTR_ERR(mosi);
@@ -367,17 +367,13 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	}
 	gpiod_set_consumer_name(mosi, "spi MOSI");
 
-	miso = devm_gpiod_get(&master->dev, "miso", GPIOD_IN);
+	dev->miso = miso = devm_gpiod_get(&master->dev, "miso", GPIOD_IN);
 	if (IS_ERR(miso)) {
 		dev_warn(&dev->master->dev, "Unable to reserve GPIO 'miso' for SPI\n");
 		ret = PTR_ERR(miso);
 		goto unregister_table;
 	}
 	gpiod_set_consumer_name(miso, "spi MISO");
-
-	dev->spi_gpio_core_desc[0] = sck;
-	dev->spi_gpio_core_desc[1] = mosi;
-	dev->spi_gpio_core_desc[2] = miso;
 
 	for (int i=0; i < master->num_chipselect; i++) {
 		struct spi_board_info board_info = {
