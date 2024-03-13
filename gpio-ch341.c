@@ -69,6 +69,8 @@ static const u16 pin_can_output = 0b111111;
 /* this macro/inline function are available since linux 5.19 */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,19,0)
 
+#define IMMUTABLE_DECL
+
 static int gpiochip_irq_reqres(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
@@ -92,11 +94,10 @@ static inline void gpio_irq_chip_set_chip(struct gpio_irq_chip *girq,
 	girq->chip = (struct irq_chip *)chip;
 }
 
-/* Flag not supported before 5.19 */
-#define IRQCHIP_IMMUTABLE 0
 
+#else
+#define IMMUTABLE_DECL const
 #endif
-
 
 /* Send a command and get a reply if requested */
 static int gpio_transfer(struct ch341_gpio *dev, int out_len, int in_len)
@@ -332,7 +333,7 @@ static int ch341_gpio_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static const struct irq_chip ch341_irqchip = {
+static IMMUTABLE_DECL struct irq_chip ch341_irqchip = {
 	.name = "CH341",
 	.irq_set_type = ch341_gpio_irq_set_type,
 	.irq_enable = ch341_gpio_irq_enable,
