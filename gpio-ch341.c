@@ -94,6 +94,8 @@ static inline void gpio_irq_chip_set_chip(struct gpio_irq_chip *girq,
 	girq->chip = (struct irq_chip *)chip;
 }
 
+/* Flag not supported before 5.19 */
+#define IRQCHIP_IMMUTABLE 0
 
 #else
 #define IMMUTABLE_DECL const
