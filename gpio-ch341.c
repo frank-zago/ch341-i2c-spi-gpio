@@ -27,10 +27,6 @@
 #include <linux/usb.h>
 #include <linux/version.h>
 
-static const struct mfd_cell ch341_gpio_devs[] = {
-	{ .name = "ch341-spi", },
-};
-
 #define CH341_GPIO_NUM_PINS         16    /* Number of GPIO pins */
 
 /* GPIO chip commands */
@@ -369,7 +365,7 @@ static int ch341_gpio_probe(struct platform_device *pdev)
 	mutex_init(&dev->gpio_lock);
 
 	gpio = &dev->gpio;
-	gpio->label = dev_name(&pdev->dev);
+	gpio->label = "ch341";
 	gpio->parent = &pdev->dev;
 	gpio->owner = THIS_MODULE;
 	gpio->get_direction = ch341_gpio_get_direction;
@@ -381,6 +377,15 @@ static int ch341_gpio_probe(struct platform_device *pdev)
 	gpio->set_multiple = ch341_gpio_set_multiple;
 	gpio->base = -1;
 	gpio->ngpio = CH341_GPIO_NUM_PINS;
+	gpio->names = (char const * const []){
+		"D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7",
+		// names are from "parallel" mode, seems to be what datasheets us
+		"ERR#", "PEMP", "INT#", "SLCT", "RST#", "WAIT#", "DS#", "AS#",
+		// names are from "print port" mode, seems to be what datasheets us
+		// "ERR#", "PEMP", "ACK#", "SLCT", "INI#", "BUSY", "AFD#", "SIN#",
+
+		// No WR#?
+	};
 	gpio->can_sleep = true;
 
 	girq = &gpio->irq;
@@ -404,11 +409,6 @@ static int ch341_gpio_probe(struct platform_device *pdev)
 		usb_free_urb(dev->irq_urb);
 		return ret;
 	}
-
-	ret = mfd_add_hotplug_devices(&pdev->dev, ch341_gpio_devs,
-				     ARRAY_SIZE(ch341_gpio_devs));
-	if (ret)
-		dev_warn(&pdev->dev, "Failed to add mfd SPI device to gpio.");
 
 	return 0;
 }

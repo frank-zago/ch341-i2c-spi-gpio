@@ -21,6 +21,7 @@
 static const struct mfd_cell ch341_devs[] = {
 	{ .name = "ch341-gpio", },
 	{ .name = "ch341-i2c", },
+	{ .name = "ch341-spi", },
 };
 
 static int ch341_usb_probe(struct usb_interface *iface,

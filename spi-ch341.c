@@ -59,31 +59,29 @@ struct spi_gpio {
 };
 
 struct ch341_spi {
-	struct spi_master *master;
-	struct mutex spi_lock;
-	u8 cs_allocated;    /* bitmask of allocated CS for SPI */
-	struct gpio_desc *spi_gpio_core_desc[3];
+	struct spi_controller *master;
+	struct gpio_desc *sck, *mosi, *miso;
 	struct spi_client {
 		struct spi_device *slave;
-		struct gpio_desc *gpio;
 		u8 buf[CH341_SPI_NSEGS * SEG_SIZE];
 	} spi_clients[CH341_SPI_MAX_NUM_DEVICES];
 
 	struct ch341_ddata *ch341;
-	struct gpio_chip *gpiochip;
 };
 
-static const struct spi_gpio spi_gpio_core[] = {
-	{ 3,  "SCK", GPIOD_OUT_HIGH },
-	{ 5,  "MOSI", GPIOD_OUT_HIGH },
-	{ 7,  "MISO", GPIOD_IN }
-};
+static struct gpiod_lookup_table gpios_table = {
+       .dev_id = NULL,
+       .table = {
+               GPIO_LOOKUP("ch341",  3,  "sck", GPIO_LOOKUP_FLAGS_DEFAULT),
+               GPIO_LOOKUP("ch341",  5,  "mosi", GPIO_LOOKUP_FLAGS_DEFAULT),
+               GPIO_LOOKUP("ch341",  7,  "miso", GPIO_LOOKUP_FLAGS_DEFAULT),
 
-static const struct spi_gpio spi_gpio_cs[CH341_SPI_MAX_NUM_DEVICES] = {
-	{ 0,  "CS0", GPIOD_OUT_HIGH },
-	{ 1,  "CS1", GPIOD_OUT_HIGH },
-	{ 2,  "CS2", GPIOD_OUT_HIGH },
-	{ 4,  "CS3", GPIOD_OUT_HIGH } /* Only on CH341A/B, not H */
+               GPIO_LOOKUP_IDX("ch341",  0,  "cs", 0, GPIOD_OUT_HIGH),
+               GPIO_LOOKUP_IDX("ch341",  1,  "cs", 1, GPIOD_OUT_HIGH),
+               GPIO_LOOKUP_IDX("ch341",  2,  "cs", 2, GPIOD_OUT_HIGH),
+               GPIO_LOOKUP_IDX("ch341",  4,  "cs", 3, GPIOD_OUT_HIGH), /* Only on CH341A/B, not H */
+               { }
+       }
 };
 
 static size_t cha341_spi_max_tx_size(struct spi_device *spi)
@@ -188,12 +186,12 @@ static unsigned int copy_from_device(u8 *rx_buf, const u8 *buf,
 }
 
 /* Send a message */
-static int ch341_spi_transfer_one_message(struct spi_master *master,
+static int ch341_spi_transfer_one_message(struct spi_controller *master,
 					  struct spi_message *m)
 {
-	struct ch341_spi *dev = spi_master_get_devdata(master);
+	struct ch341_spi *dev = spi_controller_get_devdata(master);
 	struct spi_device *spi = m->spi;
-	struct spi_client *client = &dev->spi_clients[spi->chip_select];
+	struct spi_client *client = &dev->spi_clients[spi_get_chipselect(spi, 0)];
 	bool lsb = spi->mode & SPI_LSB_FIRST;
 	struct spi_transfer *xfer;
 	unsigned int buf_idx = 0;
@@ -201,10 +199,12 @@ static int ch341_spi_transfer_one_message(struct spi_master *master,
 	struct gpio_desc *cs;
 	int status;
 
+	// sure would be cool if we could just use spi_set_cs & all the gpio magic
+	// that comes with it
 	if (spi->mode & SPI_NO_CS) {
 		cs = NULL;
 	} else {
-		cs = client->gpio;
+		cs = spi_get_csgpiod(spi, 0);
 
 		if (spi->mode & SPI_CS_HIGH)
 			gpiod_set_value_cansleep(cs, 1);
@@ -242,285 +242,38 @@ static int ch341_spi_transfer_one_message(struct spi_master *master,
 	return 0;
 }
 
-static void release_core_gpios(struct ch341_spi *dev)
-{
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(dev->spi_gpio_core_desc); i++) {
-		gpiochip_free_own_desc(dev->spi_gpio_core_desc[i]);
-		dev->spi_gpio_core_desc[i] = NULL;
-	}
-}
-
-static int request_core_gpios(struct ch341_spi *dev)
-{
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(spi_gpio_core); i++) {
-		struct gpio_desc *desc;
-		const struct spi_gpio *gpio = &spi_gpio_core[i];
-
-		desc = gpiochip_request_own_desc(dev->gpiochip,
-						 gpio->hwnum,
-						 gpio->label,
-						 GPIO_LOOKUP_FLAGS_DEFAULT,
-						 gpio->dflags);
-		if (IS_ERR(desc)) {
-			dev_warn(&dev->master->dev,
-				 "Unable to reserve GPIO %s for SPI\n",
-				 gpio->label);
-			release_core_gpios(dev);
-
-			return PTR_ERR(desc);
-		}
-
-		dev->spi_gpio_core_desc[i] = desc;
-	}
-
-	return 0;
-}
-
 /* Add a new device, defined by the board_info. */
-static int add_slave(struct ch341_spi *dev, struct spi_board_info *board_info)
+static int ch341_setup(struct spi_device *spi)
 {
-	unsigned int cs = board_info->chip_select;
-	struct spi_client *client;
-	struct gpio_desc *desc;
-	int ret;
+	struct spi_controller *ctrl = spi->controller;
+	struct ch341_spi *dev = spi_controller_get_devdata(ctrl);
+	unsigned int cs = spi_get_chipselect(spi, 0);
 
-	/* Sanity check */
-	if (cs >= dev->master->num_chipselect)
-		return -EINVAL;
+	struct spi_client *client = &dev->spi_clients[cs];
 
-	client = &dev->spi_clients[cs];
-	board_info->bus_num = dev->master->bus_num;
-
-	mutex_lock(&dev->spi_lock);
-
-	if (dev->cs_allocated & BIT(cs)) {
-		ret = -EADDRINUSE;
-		goto unlock;
-	}
-
-	if (dev->cs_allocated == 0) {
-		/* No CS allocated yet. Grab the core gpios too */
-		ret = request_core_gpios(dev);
-		if (ret)
-			goto unlock;
-
-		/* Set clock to low */
-		gpiod_set_value_cansleep(dev->spi_gpio_core_desc[0], 0);
-	}
-
-	/* Allocate the CS GPIO */
-	desc = gpiochip_request_own_desc(dev->gpiochip,
-					 spi_gpio_cs[cs].hwnum,
-					 spi_gpio_cs[cs].label,
-					 GPIO_LOOKUP_FLAGS_DEFAULT,
-					 spi_gpio_cs[cs].dflags);
-	if (IS_ERR(desc)) {
-		dev_warn(&dev->master->dev,
-			 "Unable to reserve GPIO %s for SPI\n",
-			 spi_gpio_cs[cs].label);
-		ret = PTR_ERR(desc);
-		goto unreg_core_gpios;
-	}
-
-	client->gpio = desc;
-	dev->cs_allocated |= BIT(cs);
-
-	client->slave = spi_new_device(dev->master, board_info);
-	if (!client->slave) {
-		ret = -ENOMEM;
-		goto release_cs;
-	}
-
-	mutex_unlock(&dev->spi_lock);
+	client->slave = spi;
 
 	return 0;
-
-release_cs:
-	gpiochip_free_own_desc(client->gpio);
-	client->gpio = NULL;
-	dev->cs_allocated &= ~BIT(cs);
-
-unreg_core_gpios:
-	if (dev->cs_allocated == 0)
-		release_core_gpios(dev);
-
-unlock:
-	mutex_unlock(&dev->spi_lock);
-
-	return ret;
-}
-
-static int remove_slave(struct ch341_spi *dev, unsigned int cs)
-{
-	int ret;
-
-	if (cs >= ARRAY_SIZE(spi_gpio_cs))
-		return -EINVAL;
-
-	mutex_lock(&dev->spi_lock);
-
-	if (dev->cs_allocated & BIT(cs)) {
-		dev->cs_allocated &= ~BIT(cs);
-
-		spi_unregister_device(dev->spi_clients[cs].slave);
-		dev->spi_clients[cs].slave = NULL;
-
-		gpiochip_free_own_desc(dev->spi_clients[cs].gpio);
-		dev->spi_clients[cs].gpio = NULL;
-
-		if (dev->cs_allocated == 0) {
-			/* Last slave. Release the core GPIOs */
-			release_core_gpios(dev);
-		}
-
-		ret = 0;
-	} else {
-		ret = -ENODEV;
-	}
-
-	mutex_unlock(&dev->spi_lock);
-
-	return ret;
-}
-
-/*
- * sysfs entry to add a new device. It takes a string with 2
- * parameters: the modalias and the chip select number. For instance
- * "spi-nor 0" or "spidev 1".
- */
-static ssize_t new_device_store(struct device *mdev,
-				struct device_attribute *attr,
-				const char *buf, size_t count)
-{
-	struct spi_master *master = container_of(mdev, struct spi_master, dev);
-	struct ch341_spi *dev = spi_master_get_devdata(master);
-	struct spi_board_info board_info = {
-		.mode = SPI_MODE_0,
-		.max_speed_hz = CH341_SPI_MAX_FREQ,
-	};
-	char *req_org;
-	char *req;
-	char *str;
-	int ret;
-
-	req_org = kstrdup(buf, GFP_KERNEL);
-	if (!req_org)
-		return -ENOMEM;
-
-	req = req_org;
-
-	str = strsep(&req, " ");
-	if (str == NULL) {
-		ret = -EINVAL;
-		goto free_req;
-	}
-
-	ret = strscpy(board_info.modalias, str, sizeof(board_info.modalias));
-	if (ret < 0)
-		goto free_req;
-
-	str = strsep(&req, " ");
-	if (str == NULL) {
-		ret = -EINVAL;
-		goto free_req;
-	}
-	ret = kstrtou16(str, 0, &board_info.chip_select);
-	if (ret)
-		goto free_req;
-
-	ret = add_slave(dev, &board_info);
-	if (ret)
-		goto free_req;
-
-	kfree(req_org);
-
-	return count;
-
-free_req:
-	kfree(req_org);
-
-	return ret;
-}
-
-/*
- * sysfs entry to remove an existing device at a given chip select. It
- * takes a string with a single number. For instance "2".
- */
-static ssize_t delete_device_store(struct device *mdev,
-				   struct device_attribute *attr,
-				   const char *buf, size_t count)
-{
-	struct spi_master *master = container_of(mdev, struct spi_master, dev);
-	struct ch341_spi *dev = spi_master_get_devdata(master);
-	int cs;
-	int ret;
-
-	ret = kstrtouint(buf, 0, &cs);
-	if (ret)
-		return ret;
-
-	ret = remove_slave(dev, cs);
-	if (ret)
-		return ret;
-
-	return count;
-}
-
-static DEVICE_ATTR_WO(new_device);
-static DEVICE_ATTR_WO(delete_device);
-
-static int ch341_spi_remove(struct platform_device *pdev)
-{
-	struct ch341_spi *dev = platform_get_drvdata(pdev);
-	int cs;
-
-	device_remove_file(&dev->master->dev, &dev_attr_new_device);
-	device_remove_file(&dev->master->dev, &dev_attr_delete_device);
-
-	for (cs = 0; cs < ARRAY_SIZE(dev->spi_clients); cs++)
-		remove_slave(dev, cs);
-
-	spi_unregister_master(dev->master);
-
-	return 0;
-}
-
-static int match_gpiochip_parent(struct gpio_chip *gc, void *data)
-{
-	return gc->parent == data;
 }
 
 static int ch341_spi_probe(struct platform_device *pdev)
 {
-	struct ch341_ddata *ch341 = dev_get_drvdata(pdev->dev.parent->parent);
-	struct spi_master *master;
+	struct ch341_ddata *ch341 = dev_get_drvdata(pdev->dev.parent);
+	struct spi_controller *master;
 	struct ch341_spi *dev;
 	int ret;
 
-	master = spi_alloc_master(&pdev->dev, sizeof(*dev));
+	master = devm_spi_alloc_master(&pdev->dev, sizeof(*dev));
 	if (!master)
 		return -ENOMEM;
 
-	dev = spi_master_get_devdata(master);
+	dev = spi_controller_get_devdata(master);
 
 	dev->master = master;
 	dev->ch341 = ch341;
 	platform_set_drvdata(pdev, dev);
 
-	/* Find the parent's gpiochip */
-	dev->gpiochip = gpiochip_find(pdev->dev.parent, match_gpiochip_parent);
-	if (!dev->gpiochip) {
-		dev_err(&master->dev, "Parent GPIO chip not found!\n");
-		ret = -ENODEV;
-		goto unreg_master;
-	}
-
-	mutex_init(&dev->spi_lock);
-
+	master->setup = ch341_setup;
 	master->bus_num = -1;
 	master->num_chipselect = CH341_SPI_MAX_NUM_DEVICES;
 	master->mode_bits = SPI_MODE_0 | SPI_LSB_FIRST;
@@ -531,30 +284,56 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	master->min_speed_hz = CH341_SPI_MIN_FREQ;
 	master->max_transfer_size = cha341_spi_max_tx_size;
 	master->max_message_size = cha341_spi_max_tx_size;
+	master->use_gpio_descriptors = true;
 
-	ret = spi_register_master(master);
+	gpios_table.dev_id = NULL;
+    gpiod_add_lookup_table(&gpios_table);
+
+	ret = devm_spi_register_master(&pdev->dev, master);
 	if (ret)
-		goto unreg_master;
+		goto unregister_table;
 
-	ret = device_create_file(&master->dev, &dev_attr_new_device);
-	if (ret) {
-		dev_err(&master->dev, "Cannot create new_device file\n");
-		goto unreg_master;
+	gpios_table.dev_id = dev_name(&master->dev);
+
+	struct gpio_desc *sck, *mosi, *miso;
+	dev->sck = sck = devm_gpiod_get(&master->dev, "sck", GPIOD_OUT_HIGH);
+	if (IS_ERR(sck)) {
+		dev_warn(&dev->master->dev, "Unable to reserve GPIO 'sck' for SPI\n");
+		ret = PTR_ERR(sck);
+		goto unregister_table;
+	}
+	gpiod_set_consumer_name(sck, "spi SCK");
+
+	dev->mosi = mosi = devm_gpiod_get(&master->dev, "mosi", GPIOD_OUT_HIGH);
+	if (IS_ERR(mosi)) {
+		dev_warn(&dev->master->dev, "Unable to reserve GPIO 'mosi' for SPI\n");
+		ret = PTR_ERR(mosi);
+		goto unregister_table;
+	}
+	gpiod_set_consumer_name(mosi, "spi MOSI");
+
+	dev->miso = miso = devm_gpiod_get(&master->dev, "miso", GPIOD_IN);
+	if (IS_ERR(miso)) {
+		dev_warn(&dev->master->dev, "Unable to reserve GPIO 'miso' for SPI\n");
+		ret = PTR_ERR(miso);
+		goto unregister_table;
+	}
+	gpiod_set_consumer_name(miso, "spi MISO");
+
+	/* Set clock to low */
+	gpiod_set_value_cansleep(dev->sck, 0);
+
+	for (int i=0; i < master->num_chipselect; i++) {
+		struct spi_board_info board_info = {
+			.mode = SPI_MODE_0,
+			.max_speed_hz = CH341_SPI_MAX_FREQ,
+		};
+		board_info.chip_select = i;
+		spi_new_device(master, &board_info);
 	}
 
-	ret = device_create_file(&master->dev, &dev_attr_delete_device);
-	if (ret) {
-		dev_err(&master->dev, "Cannot create delete_device file\n");
-		goto del_new_device;
-	}
-
-	return 0;
-
-del_new_device:
-	device_remove_file(&dev->master->dev, &dev_attr_new_device);
-
-unreg_master:
-	spi_master_put(master);
+unregister_table:
+	gpiod_remove_lookup_table(&gpios_table);
 
 	return ret;
 }
@@ -562,7 +341,6 @@ unreg_master:
 static struct platform_driver ch341_spi_driver = {
 	.driver.name = "ch341-spi",
 	.probe	     = ch341_spi_probe,
-	.remove	     = ch341_spi_remove,
 };
 module_platform_driver(ch341_spi_driver);
 
