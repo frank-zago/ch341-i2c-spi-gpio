@@ -196,7 +196,11 @@ static int ch341_spi_transfer_one_message(struct spi_master *master,
 {
 	struct ch341_spi *dev = spi_master_get_devdata(master);
 	struct spi_device *spi = m->spi;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,3,0)
+	struct spi_client *client = &dev->spi_clients[spi_get_chipselect(spi, 0)];
+#else
 	struct spi_client *client = &dev->spi_clients[spi->chip_select];
+#endif
 	bool lsb = spi->mode & SPI_LSB_FIRST;
 	struct spi_transfer *xfer;
 	unsigned int buf_idx = 0;
