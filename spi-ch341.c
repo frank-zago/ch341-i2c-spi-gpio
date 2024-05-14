@@ -59,7 +59,7 @@ struct spi_gpio {
 };
 
 struct ch341_spi {
-	struct spi_master *master;
+	struct spi_controller *controller;
 	struct mutex spi_lock;
 	u8 cs_allocated;    /* bitmask of allocated CS for SPI */
 	struct gpio_desc *spi_gpio_core_desc[3];
@@ -191,10 +191,10 @@ static unsigned int copy_from_device(u8 *rx_buf, const u8 *buf,
 }
 
 /* Send a message */
-static int ch341_spi_transfer_one_message(struct spi_master *master,
+static int ch341_spi_transfer_one_message(struct spi_controller *controller,
 					  struct spi_message *m)
 {
-	struct ch341_spi *dev = spi_master_get_devdata(master);
+	struct ch341_spi *dev = spi_controller_get_devdata(controller);
 	struct spi_device *spi = m->spi;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,3,0)
 	struct spi_client *client = &dev->spi_clients[spi_get_chipselect(spi, 0)];
@@ -244,7 +244,7 @@ static int ch341_spi_transfer_one_message(struct spi_master *master,
 	}
 
 	m->status = status;
-	spi_finalize_current_message(master);
+	spi_finalize_current_message(controller);
 
 	return 0;
 }
@@ -273,7 +273,7 @@ static int request_core_gpios(struct ch341_spi *dev)
 						 GPIO_LOOKUP_FLAGS_DEFAULT,
 						 gpio->dflags);
 		if (IS_ERR(desc)) {
-			dev_warn(&dev->master->dev,
+			dev_warn(&dev->controller->dev,
 				 "Unable to reserve GPIO %s for SPI\n",
 				 gpio->label);
 			release_core_gpios(dev);
@@ -296,11 +296,11 @@ static int add_slave(struct ch341_spi *dev, struct spi_board_info *board_info)
 	int ret;
 
 	/* Sanity check */
-	if (cs >= dev->master->num_chipselect)
+	if (cs >= dev->controller->num_chipselect)
 		return -EINVAL;
 
 	client = &dev->spi_clients[cs];
-	board_info->bus_num = dev->master->bus_num;
+	board_info->bus_num = dev->controller->bus_num;
 
 	mutex_lock(&dev->spi_lock);
 
@@ -326,7 +326,7 @@ static int add_slave(struct ch341_spi *dev, struct spi_board_info *board_info)
 					 GPIO_LOOKUP_FLAGS_DEFAULT,
 					 spi_gpio_cs[cs].dflags);
 	if (IS_ERR(desc)) {
-		dev_warn(&dev->master->dev,
+		dev_warn(&dev->controller->dev,
 			 "Unable to reserve GPIO %s for SPI\n",
 			 spi_gpio_cs[cs].label);
 		ret = PTR_ERR(desc);
@@ -336,7 +336,7 @@ static int add_slave(struct ch341_spi *dev, struct spi_board_info *board_info)
 	client->gpio = desc;
 	dev->cs_allocated |= BIT(cs);
 
-	client->slave = spi_new_device(dev->master, board_info);
+	client->slave = spi_new_device(dev->controller, board_info);
 	if (!client->slave) {
 		ret = -ENOMEM;
 		goto release_cs;
@@ -403,8 +403,8 @@ static ssize_t new_device_store(struct device *mdev,
 				struct device_attribute *attr,
 				const char *buf, size_t count)
 {
-	struct spi_master *master = container_of(mdev, struct spi_master, dev);
-	struct ch341_spi *dev = spi_master_get_devdata(master);
+	struct spi_controller *controller = container_of(mdev, struct spi_controller, dev);
+	struct ch341_spi *dev = spi_controller_get_devdata(controller);
 	struct spi_board_info board_info = {
 		.mode = SPI_MODE_0,
 		.max_speed_hz = CH341_SPI_MAX_FREQ,
@@ -461,8 +461,8 @@ static ssize_t delete_device_store(struct device *mdev,
 				   struct device_attribute *attr,
 				   const char *buf, size_t count)
 {
-	struct spi_master *master = container_of(mdev, struct spi_master, dev);
-	struct ch341_spi *dev = spi_master_get_devdata(master);
+	struct spi_controller *controller = container_of(mdev, struct spi_controller, dev);
+	struct ch341_spi *dev = spi_controller_get_devdata(controller);
 	int cs;
 	int ret;
 
@@ -485,8 +485,8 @@ static int ch341_spi_remove(struct platform_device *pdev)
 	struct ch341_spi *dev = platform_get_drvdata(pdev);
 	int cs;
 
-	device_remove_file(&dev->master->dev, &dev_attr_new_device);
-	device_remove_file(&dev->master->dev, &dev_attr_delete_device);
+	device_remove_file(&dev->controller->dev, &dev_attr_new_device);
+	device_remove_file(&dev->controller->dev, &dev_attr_delete_device);
 
 	for (cs = 0; cs < ARRAY_SIZE(dev->spi_clients); cs++)
 		remove_slave(dev, cs);
@@ -495,12 +495,16 @@ static int ch341_spi_remove(struct platform_device *pdev)
 	gpio_device_put(dev->gdev);
 #endif
 
-	spi_unregister_master(dev->master);
+	spi_unregister_controller(dev->controller);
 
 	return 0;
 }
 
-static int match_gpiochip_parent(struct gpio_chip *gc, void *data)
+static int match_gpiochip_parent(struct gpio_chip *gc,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,9,0)
+				 const
+#endif
+				 void *data)
 {
 	return gc->parent == data;
 }
@@ -508,17 +512,17 @@ static int match_gpiochip_parent(struct gpio_chip *gc, void *data)
 static int ch341_spi_probe(struct platform_device *pdev)
 {
 	struct ch341_ddata *ch341 = dev_get_drvdata(pdev->dev.parent->parent);
-	struct spi_master *master;
+	struct spi_controller *controller;
 	struct ch341_spi *dev;
 	int ret;
 
-	master = spi_alloc_master(&pdev->dev, sizeof(*dev));
-	if (!master)
+	controller = spi_alloc_master(&pdev->dev, sizeof(*dev));
+	if (!controller)
 		return -ENOMEM;
 
-	dev = spi_master_get_devdata(master);
+	dev = spi_controller_get_devdata(controller);
 
-	dev->master = master;
+	dev->controller = controller;
 	dev->ch341 = ch341;
 	platform_set_drvdata(pdev, dev);
 
@@ -529,58 +533,58 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	dev->gdev = gpio_device_find(pdev->dev.parent, match_gpiochip_parent);
 	if (!dev->gdev) {
 		ret = -ENODEV;
-		goto unreg_master;
+		goto unreg_controller;
 	}
 
 	dev->gpiochip = gpio_device_get_chip(dev->gdev);
 #endif
 	if (!dev->gpiochip) {
-		dev_err(&master->dev, "Parent GPIO chip not found!\n");
+		dev_err(&controller->dev, "Parent GPIO chip not found!\n");
 		ret = -ENODEV;
 		goto put_gpio;
 	}
 
 	mutex_init(&dev->spi_lock);
 
-	master->bus_num = -1;
-	master->num_chipselect = CH341_SPI_MAX_NUM_DEVICES;
-	master->mode_bits = SPI_MODE_0 | SPI_LSB_FIRST;
-	master->flags = SPI_CONTROLLER_MUST_RX | SPI_CONTROLLER_MUST_TX;
-	master->bits_per_word_mask = SPI_BPW_MASK(8);
-	master->transfer_one_message = ch341_spi_transfer_one_message;
-	master->max_speed_hz = CH341_SPI_MAX_FREQ;
-	master->min_speed_hz = CH341_SPI_MIN_FREQ;
-	master->max_transfer_size = cha341_spi_max_tx_size;
-	master->max_message_size = cha341_spi_max_tx_size;
+	controller->bus_num = -1;
+	controller->num_chipselect = CH341_SPI_MAX_NUM_DEVICES;
+	controller->mode_bits = SPI_MODE_0 | SPI_LSB_FIRST;
+	controller->flags = SPI_CONTROLLER_MUST_RX | SPI_CONTROLLER_MUST_TX;
+	controller->bits_per_word_mask = SPI_BPW_MASK(8);
+	controller->transfer_one_message = ch341_spi_transfer_one_message;
+	controller->max_speed_hz = CH341_SPI_MAX_FREQ;
+	controller->min_speed_hz = CH341_SPI_MIN_FREQ;
+	controller->max_transfer_size = cha341_spi_max_tx_size;
+	controller->max_message_size = cha341_spi_max_tx_size;
 
-	ret = spi_register_master(master);
+	ret = spi_register_controller(controller);
 	if (ret)
 		goto put_gpio;
 
-	ret = device_create_file(&master->dev, &dev_attr_new_device);
+	ret = device_create_file(&controller->dev, &dev_attr_new_device);
 	if (ret) {
-		dev_err(&master->dev, "Cannot create new_device file\n");
+		dev_err(&controller->dev, "Cannot create new_device file\n");
 		goto put_gpio;
 	}
 
-	ret = device_create_file(&master->dev, &dev_attr_delete_device);
+	ret = device_create_file(&controller->dev, &dev_attr_delete_device);
 	if (ret) {
-		dev_err(&master->dev, "Cannot create delete_device file\n");
+		dev_err(&controller->dev, "Cannot create delete_device file\n");
 		goto del_new_device;
 	}
 
 	return 0;
 
 del_new_device:
-	device_remove_file(&dev->master->dev, &dev_attr_new_device);
+	device_remove_file(&dev->controller->dev, &dev_attr_new_device);
 
 put_gpio:
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,7,0)
 	gpio_device_put(dev->gdev);
 
-unreg_master:
+unreg_controller:
 #endif
-	spi_master_put(master);
+	spi_controller_put(controller);
 
 	return ret;
 }
