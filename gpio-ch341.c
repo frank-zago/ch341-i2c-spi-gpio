@@ -324,7 +324,13 @@ static void ch341_gpio_irq_disable(struct irq_data *data)
 	usb_unlink_urb(dev->irq_urb);
 }
 
-static int ch341_gpio_remove(struct platform_device *pdev)
+static
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,11,0)
+int
+#else
+void
+#endif
+ch341_gpio_remove(struct platform_device *pdev)
 {
 	struct ch341_gpio *dev = platform_get_drvdata(pdev);
 
@@ -332,7 +338,9 @@ static int ch341_gpio_remove(struct platform_device *pdev)
 	gpiochip_remove(&dev->gpio);
 	usb_free_urb(dev->irq_urb);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,11,0)
 	return 0;
+#endif
 }
 
 static IMMUTABLE_DECL struct irq_chip ch341_irqchip = {

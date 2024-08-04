@@ -480,7 +480,13 @@ static ssize_t delete_device_store(struct device *mdev,
 static DEVICE_ATTR_WO(new_device);
 static DEVICE_ATTR_WO(delete_device);
 
-static int ch341_spi_remove(struct platform_device *pdev)
+static
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,11,0)
+int
+#else
+void
+#endif
+ch341_spi_remove(struct platform_device *pdev)
 {
 	struct ch341_spi *dev = platform_get_drvdata(pdev);
 	int cs;
@@ -497,7 +503,9 @@ static int ch341_spi_remove(struct platform_device *pdev)
 
 	spi_unregister_controller(dev->controller);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,11,0)
 	return 0;
+#endif
 }
 
 static int match_gpiochip_parent(struct gpio_chip *gc,
