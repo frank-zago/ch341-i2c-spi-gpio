@@ -206,43 +206,62 @@ static int ch341_spi_transfer_one_message(struct spi_controller *controller,
 	unsigned int buf_idx = 0;
 	unsigned int tx_len = 0;
 	struct gpio_desc *cs;
+	bool skip = false;
 	int status;
 
-	if (spi->mode & SPI_NO_CS) {
-		cs = NULL;
-	} else {
-		cs = client->gpio;
-
-		if (spi->mode & SPI_CS_HIGH)
-			gpiod_set_value_cansleep(cs, 1);
-		else
-			gpiod_set_value_cansleep(cs, 0);
-	}
-
+	m->actual_length = 0;
+	mutex_lock(&dev->spi_lock);
 	list_for_each_entry(xfer, &m->transfers, transfer_list) {
+		if (!xfer->len) {
+			status = 0;
+			skip = true;
+			goto complete_xfer;
+		}
+
+		if (spi->mode & SPI_NO_CS) {
+			cs = NULL;
+		} else {
+			cs = client->gpio;
+
+			if (spi->mode & SPI_CS_HIGH)
+				gpiod_set_value_cansleep(cs, 1);
+			else
+				gpiod_set_value_cansleep(cs, 0);
+		}
+
 		buf_idx = copy_to_device(client->buf, buf_idx, xfer->tx_buf, xfer->len, lsb);
-
 		tx_len += xfer->len;
-	}
 
-	status = spi_transfer(dev, client->buf, buf_idx, buf_idx - tx_len);
-	if (cs) {
-		if (spi->mode & SPI_CS_HIGH)
-			gpiod_set_value_cansleep(cs, 0);
-		else
-			gpiod_set_value_cansleep(cs, 1);
-	}
+		status = spi_transfer(dev, client->buf, buf_idx, buf_idx - tx_len);
+		if (cs) {
+			if (spi->mode & SPI_CS_HIGH)
+				gpiod_set_value_cansleep(cs, 0);
+			else
+				gpiod_set_value_cansleep(cs, 1);
+		}
 
-	if (status >= 0) {
-		buf_idx = 0;
-		list_for_each_entry(xfer, &m->transfers, transfer_list)
+
+		if (status >= 0) {
+			buf_idx = 0;
 			buf_idx = copy_from_device(xfer->rx_buf, client->buf,
 						   buf_idx, xfer->len, lsb);
+		} else {
+			goto complete_xfer;
+		}
 
-		m->actual_length = tx_len;
-		status = 0;
+		m->actual_length += tx_len;
+
+complete_xfer:
+		if (status < 0 ) {
+			spi_transfer_delay_exec(xfer);
+			goto exit;
+		} else if (xfer->cs_change || skip) {
+			spi_transfer_delay_exec(xfer);
+		}
 	}
 
+exit:
+	mutex_unlock(&dev->spi_lock);
 	m->status = status;
 	spi_finalize_current_message(controller);
 
