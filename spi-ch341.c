@@ -524,7 +524,7 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	struct ch341_spi *dev;
 	int ret;
 
-	controller = spi_alloc_master(&pdev->dev, sizeof(*dev));
+	controller = spi_alloc_host(&pdev->dev, sizeof(*dev));
 	if (!controller)
 		return -ENOMEM;
 
