@@ -18,6 +18,9 @@
 #include <linux/slab.h>
 #include <linux/usb.h>
 
+#define CH341_USB_EP_INT   0x01
+#define CH341_USB_EP_BULK  0x02
+
 static const struct mfd_cell ch341_devs[] = {
 	{ .name = "ch341-gpio", },
 	{ .name = "ch341-i2c", },
@@ -26,11 +29,18 @@ static const struct mfd_cell ch341_devs[] = {
 static int ch341_usb_probe(struct usb_interface *iface,
 			   const struct usb_device_id *usb_id)
 {
-	struct usb_endpoint_descriptor *bulk_out;
-	struct usb_endpoint_descriptor *bulk_in;
-	struct usb_endpoint_descriptor *intr_in;
+	struct usb_endpoint_descriptor *bulk_out = NULL;
+	struct usb_endpoint_descriptor *bulk_in = NULL;
+	struct usb_endpoint_descriptor *intr_in = NULL;
 	struct ch341_ddata *ddata;
 	int ret;
+	static const u8 int_ep_addr[] = {
+		CH341_USB_EP_INT | USB_DIR_IN,
+		0};
+	static const u8 bulk_ep_addr[] = {
+		CH341_USB_EP_BULK | USB_DIR_IN,
+		CH341_USB_EP_BULK | USB_DIR_OUT,
+		0};
 
 	ddata = devm_kzalloc(&iface->dev, sizeof(*ddata), GFP_KERNEL);
 	if (!ddata)
@@ -39,11 +49,28 @@ static int ch341_usb_probe(struct usb_interface *iface,
 	ddata->usb_dev = interface_to_usbdev(iface);
 	mutex_init(&ddata->usb_lock);
 
+	if (!usb_check_bulk_endpoints(iface, bulk_ep_addr) ||
+	    !usb_check_int_endpoints(iface, int_ep_addr)) {
+		dev_err(&iface->dev, "Expected EPs 0x%02x/0x%02x (bulk) and 0x%02x (int) not found\n",
+		        CH341_USB_EP_BULK | USB_DIR_IN, CH341_USB_EP_BULK | USB_DIR_OUT,
+		        CH341_USB_EP_INT | USB_DIR_IN);
+		return -ENODEV;
+	}
+
 	ret = usb_find_common_endpoints(iface->cur_altsetting, &bulk_in,
 					&bulk_out, &intr_in, NULL);
 	if (ret) {
 		dev_err(&iface->dev, "Could not find all endpoints\n");
 		return -ENODEV;
+	}
+
+	if (bulk_in->bEndpointAddress  != (CH341_USB_EP_BULK | USB_DIR_IN)  ||
+	    bulk_out->bEndpointAddress != (CH341_USB_EP_BULK | USB_DIR_OUT) ||
+	    intr_in->bEndpointAddress  != (CH341_USB_EP_INT  | USB_DIR_IN)) {
+	    dev_err(&iface->dev, "Unexpected EP addrs: in 0x%02x out 0x%02x int 0x%02x\n",
+	            bulk_in->bEndpointAddress, bulk_out->bEndpointAddress,
+	            intr_in->bEndpointAddress);
+	    return -ENODEV;
 	}
 
 	ddata->ep_in = bulk_in->bEndpointAddress;
