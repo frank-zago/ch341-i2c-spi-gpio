@@ -15,6 +15,7 @@
 #include "ch341.h"
 #include <linux/mfd/core.h>
 #include <linux/module.h>
+#include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/usb.h>
 
@@ -30,6 +31,70 @@ struct ch341_ep_map {
 	u8 bulk[2]; /* [O] out, [1] in */
 	u8 intr[2]; /* [0] out, [1] in */
 };
+
+/* Max number of user-provided VID:PID maps parsed from epmap= */
+#define CH341_MAX_USER_MAPS 16
+static struct ch341_ep_map user_maps[CH341_MAX_USER_MAPS];
+static u16 user_vid[CH341_MAX_USER_MAPS], user_pid[CH341_MAX_USER_MAPS];
+static int user_maps_cnt = 0;
+
+/* epmap format:
+ *   epmap="vid:pid:bin,bout,iin[;vid:pid:bin,bout,iin...]"
+ * values are hex, e.g. epmap="1a86:5512:0x82,0x02,0x81;cafe:0001:0x83,0x03,0x81"
+ *  - bin  = bulk IN endpoint address (e.g. 0x82)
+ *  - bout = bulk OUT endpoint address (e.g. 0x02)
+ *  - iin  = interrupt IN endpoint address (e.g. 0x81)
+ */
+static char *epmap = NULL;
+module_param(epmap, charp, 0444);
+MODULE_PARM_DESC(epmap, "VID:PID:endpoints list; eg 1a86:5512:0x82,0x02,0x81[;...]");
+
+static const struct ch341_ep_map *find_user_map(u16 vid, u16 pid)
+{
+	for (int i = 0; i < user_maps_cnt; i++)
+		if (user_vid[i] == vid && user_pid[i] == pid)
+			return &user_maps[i];
+	return NULL;
+}
+
+static int __init ch341_parse_epmap(void)
+{
+	char *s, *p, *tok;
+
+	if (!epmap || !*epmap)
+		return 0;
+
+	s = kstrdup(epmap, GFP_KERNEL);
+
+	if (!s)
+		return -ENOMEM;
+	p = s;
+	while ((tok = strsep(&p, ";")) != NULL) {
+		unsigned int vid, pid, bin, bout, iin;
+		if (!*tok)
+			continue;
+		if (user_maps_cnt >= CH341_MAX_USER_MAPS)
+			break;
+		/* Allow 0x.. or plain hex */
+		if (sscanf(tok, "%x:%x:%x,%x,%x", &vid, &pid, &bin, &bout, &iin) != 5)
+			continue;
+		user_vid[user_maps_cnt] = (u16)vid;
+		user_pid[user_maps_cnt] = (u16)pid;
+		if ((bin & USB_DIR_IN) != USB_DIR_IN)
+			pr_warn("malfommed 0x%04x:0x%04x bulk in=0x%02x\n", vid, pid, bin);
+		if ((bout & USB_DIR_IN) != USB_DIR_OUT)
+			pr_warn("malfommed 0x%04x:0x%04x bulk out=0x%02x\n", vid, pid, bout);
+		if ((iin & USB_DIR_IN) != USB_DIR_IN)
+			pr_warn("malfommed 0x%04x:0x%04x int in=0x%02x\n", vid, pid, iin);
+		user_maps[user_maps_cnt].bulk[USB_DIR(USB_DIR_IN)] = (u8)bin;
+		user_maps[user_maps_cnt].bulk[USB_DIR(USB_DIR_OUT)] = (u8)bout;
+		user_maps[user_maps_cnt].intr[USB_DIR(USB_DIR_IN)] = (u8)iin;
+		user_maps[user_maps_cnt].intr[0] = 0; /* unused */
+		user_maps_cnt++;
+	}
+	kfree(s);
+	return 0;
+}
 
 static const struct mfd_cell ch341_devs[] = {
 	{ .name = "ch341-gpio", },
@@ -84,6 +149,7 @@ static int ch341_usb_probe(struct usb_interface *iface,
 {
 	const struct ch341_ep_map *map = (const void *)usb_id->driver_info;
 	const struct usb_host_interface *alt = iface->cur_altsetting;
+	const struct usb_device *udev = interface_to_usbdev(iface);
 	const struct usb_endpoint_descriptor *bulk_out = NULL;
 	const struct usb_endpoint_descriptor *bulk_in = NULL;
 	const struct usb_endpoint_descriptor *intr_in = NULL;
@@ -94,6 +160,15 @@ static int ch341_usb_probe(struct usb_interface *iface,
 		dev_warn(&iface->dev, "Not a vendor-specific interface; skip\n");
 		return -ENODEV;
 	}
+
+	/* If no static map from the match table, try user-provided maps */
+	if (!map) {
+		map = find_user_map(le16_to_cpu(udev->descriptor.idVendor),
+				    le16_to_cpu(udev->descriptor.idProduct));
+	}
+
+	if (!map)
+		dev_warn(&iface->dev, "Missing endpoint map\n");
 
 	ddata = devm_kzalloc(&iface->dev, sizeof(*ddata), GFP_KERNEL);
 	if (!ddata)
@@ -122,7 +197,7 @@ static int ch341_usb_probe(struct usb_interface *iface,
 	if (ret)
 		dev_err(&iface->dev, "Failed to add child devices\n");
 
-
+	dev_info(&iface->dev, "MFD registered\n");
 	return ret;
 }
 
@@ -153,7 +228,28 @@ static struct usb_driver ch341_usb_driver = {
 	.probe      = ch341_usb_probe,
 	.disconnect = ch341_usb_disconnect,
 };
-module_usb_driver(ch341_usb_driver);
+
+/* extended module_usb_driver() */
+static int __init ch341_core_init(void)
+{
+	/* parse insmod's modules arguments */
+	int ret = ch341_parse_epmap();
+
+	if (ret) {
+		pr_err("ch341-mfd: failed to parse epmap (%d)\n", ret);
+		return ret;
+	}
+
+	return usb_register(&ch341_usb_driver);
+}
+
+static void __exit ch341_core_exit(void)
+{
+	usb_deregister(&ch341_usb_driver);
+}
+
+module_init(ch341_core_init);
+module_exit(ch341_core_exit);
 
 MODULE_AUTHOR("Frank Zago <frank@zago.net>");
 MODULE_DESCRIPTION("CH341 USB to I2C/SPI/GPIO adapter");
