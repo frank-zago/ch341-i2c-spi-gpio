@@ -91,6 +91,19 @@ These drivers have been tested with a linux kernel 6.2, and should
 still build for older kernels.
 
 
+Module tuning
+-------------
+
+Should you need to load the ch341 with a specific USB Vendor ID,
+Product ID including its specific endpoints, you can use the optional
+argument `epmap`:
+
+  $ insmod ch341-core.ko epmap="1a86:5512:0x82,0x02,0x81;cafe:0001:0x83,0x03,0x81"
+or
+  $ insmod ch341-core.ko epmap="1a86:5512;cafe:0001:0x83,0x03,0x81"
+
+  $ echo "1a86 5512" | sudo tee /sys/bus/usb/drivers/ch341-mfd/new_id
+
 Setup
 -----
 
