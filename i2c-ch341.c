@@ -3,11 +3,15 @@
  * I2C cell driver for the CH341A, CH341B and CH341T.
  *
  * Copyright 2022, Frank Zago
+ * Copyright (c) 2023 Bernhard Guillon (Bernhard.Guillon@begu.org)
  * Copyright (c) 2016 Tse Lun Bien
  * Copyright (c) 2014 Marco Gittler
  * Copyright (C) 2006-2007 Till Harbaum (Till@Harbaum.org)
  */
 
+#include <linux/gpio/driver.h>
+#include <linux/gpio/consumer.h>
+#include <linux/gpio/machine.h>
 #include <linux/i2c.h>
 #include <linux/kernel.h>
 #include "ch341.h"
@@ -36,9 +40,29 @@
 /* Limit the transfer read size in one go to 32 bytes. */
 #define MAX_RD_LENGTH 32
 
+/*
+ * Pin configuration. The I2C interfaces use 2 pins
+ * allocated to GPIOs. But we need to grab 4 pins
+ * to make sure that we don't mix signals.
+ */
+struct i2c_gpio {
+	unsigned int hwnum;
+	const char *label;
+	enum gpiod_flags dflags;
+};
+
 struct ch341_i2c {
 	struct i2c_adapter adapter;
 	u8 *i2c_buf;
+	struct gpio_desc *i2c_gpio_desc[4];
+	struct gpio_chip *gpiochip;
+};
+
+static const struct i2c_gpio i2c_gpios[] = {
+	{ 16,  "reserved", GPIOD_OUT_HIGH },
+	{ 17,  "reserved", GPIOD_OUT_HIGH },
+	{ 18,  "SCL", GPIOD_OUT_HIGH },
+	{ 19,  "SDA", GPIOD_OUT_HIGH },
 };
 
 /*
@@ -257,6 +281,50 @@ static void devm_i2c_del_adapter(void *adapter)
 }
 #endif
 
+static void release_gpios(struct ch341_i2c *dev)
+{
+	int i;
+	for (i = 0; i < ARRAY_SIZE(dev->i2c_gpio_desc); i++) {
+		gpiochip_free_own_desc(dev->i2c_gpio_desc[i]);
+		dev->i2c_gpio_desc[i] = NULL;
+	}
+}
+
+static int request_gpios(struct platform_device *pdev, struct ch341_i2c *dev)
+{
+	int i;
+	for (i = 0; i < ARRAY_SIZE(i2c_gpios); i++) {
+		struct gpio_desc *desc;
+		const struct i2c_gpio *gpio = &i2c_gpios[i];
+		desc = gpiochip_request_own_desc(dev->gpiochip,
+						 gpio->hwnum,
+						 gpio->label,
+						 GPIO_LOOKUP_FLAGS_DEFAULT,
+						 gpio->dflags);
+		if (IS_ERR(desc)) {
+			dev_warn(&pdev->dev,
+				 "Unable to reserve GPIO %s for I2C\n",
+				 gpio->label);
+			release_gpios(dev);
+			return PTR_ERR(desc);
+		}
+		dev->i2c_gpio_desc[i] = desc;
+	}
+	return 0;
+}
+
+static int match_gpiochip_parent(struct gpio_chip *gc, void *data)
+{
+	/*
+	 * FIMXE: as this is a child of a mfd driver just return
+	 *        1 for now :/
+	 */
+
+	printk("gc->parent %p| data %p|\n", gc->parent, data);
+	// return gc->parent == data;
+	return 1;
+}
+
 static int ch341_i2c_probe(struct platform_device *pdev)
 {
 	struct ch341_ddata *ddata = dev_get_drvdata(pdev->dev.parent);
@@ -285,6 +353,20 @@ static int ch341_i2c_probe(struct platform_device *pdev)
 	i2c_set_adapdata(&ch341_i2c->adapter, ch341_i2c);
 	platform_set_drvdata(pdev, ch341_i2c);
 
+	/*
+	 * FIMXE as this is a child of a mfd driver we cannot use pdev->dev.parent
+	 *       unfortunate pdev->mfd_cell->platform_data is a null pointer
+	 *       so for now just pass the wrong dev.parent here.
+	 */
+	/* Find the parent's gpiochip */
+	ch341_i2c->gpiochip = gpiochip_find(pdev->dev.parent, match_gpiochip_parent);
+	if (!ch341_i2c->gpiochip) {
+		dev_err(&pdev->dev, "Parent GPIO chip not found!\n");
+		return -ENODEV;
+	}
+
+	request_gpios(pdev, ch341_i2c);
+
 	/* Set ch341 i2c speed */
 	ch341_i2c->i2c_buf[0] = CH341_CMD_I2C_STREAM;
 	ch341_i2c->i2c_buf[1] = CH341_CMD_I2C_STM_SET | CH341_I2C_100KHZ;
@@ -311,9 +393,17 @@ static int ch341_i2c_probe(struct platform_device *pdev)
 #endif
 }
 
+static int ch341_i2c_remove(struct platform_device *pdev)
+{
+	struct ch341_i2c *ch341_i2c = platform_get_drvdata(pdev);
+	release_gpios(ch341_i2c);
+	return 0;
+}
+
 static struct platform_driver ch341_i2c_driver = {
 	.driver.name	= "ch341-i2c",
 	.probe		= ch341_i2c_probe,
+	.remove		= ch341_i2c_remove,
 };
 module_platform_driver(ch341_i2c_driver);
 
