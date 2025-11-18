@@ -212,7 +212,13 @@ static void write_outputs(struct ch341_gpio *dev)
 	mutex_unlock(&dev->gpio_lock);
 }
 
-static void ch341_gpio_set(struct gpio_chip *chip, unsigned int offset, int value)
+static 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,17,0)
+int
+#else
+void
+#endif
+ch341_gpio_set(struct gpio_chip *chip, unsigned int offset, int value)
 {
 	struct ch341_gpio *dev = gpiochip_get_data(chip);
 
@@ -222,9 +228,19 @@ static void ch341_gpio_set(struct gpio_chip *chip, unsigned int offset, int valu
 		dev->gpio_last_written &= ~BIT(offset);
 
 	write_outputs(dev);
+
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,17,0)
+	return 0;
+	#endif
 }
 
-static void ch341_gpio_set_multiple(struct gpio_chip *chip,
+static 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,17,0)
+int
+#else
+void
+#endif
+ch341_gpio_set_multiple(struct gpio_chip *chip,
 				    unsigned long *mask, unsigned long *bits)
 {
 	struct ch341_gpio *dev = gpiochip_get_data(chip);
@@ -232,6 +248,10 @@ static void ch341_gpio_set_multiple(struct gpio_chip *chip,
 	dev->gpio_last_written = (dev->gpio_last_written & ~*mask) | (*bits & *mask);
 
 	write_outputs(dev);
+
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,17,0)
+	return 0;
+	#endif
 }
 
 static int ch341_gpio_get_direction(struct gpio_chip *chip,
