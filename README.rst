@@ -291,6 +291,13 @@ appear::
 
 Change spi0 and spi0.0 as appropriate.
 
+Starting with the Linux kernel 7.3, 'new_device' and 'delete_device'
+are provided by the SPI core itself when CONFIG_SPI_DYNAMIC is set, as
+on most distribution kernels. They work the same way, but 'new_device'
+also accepts an optional max speed in Hz and an SPI mode after the CS
+number, and binds the device to the named driver directly, so the two
+steps above are not needed anymore.
+
 After these command, the GPIO lines will report::
 
   $ gpioinfo gpiochip2
