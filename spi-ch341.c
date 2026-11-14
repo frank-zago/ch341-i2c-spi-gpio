@@ -29,6 +29,10 @@
 #define SPI_CONTROLLER_MUST_TX SPI_MASTER_MUST_TX
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7,3,0) || !IS_ENABLED(CONFIG_SPI_DYNAMIC)
+#define CH341_SPI_OWN_SYSFS
+#endif
+
 /*
  * Only one frequency of about 1.5MHz, which could be the on-board
  * 12MHz divided by 8. Keep a min_freq low to avoid errors from callers
@@ -61,6 +65,9 @@ struct spi_gpio {
 struct ch341_spi {
 	struct spi_controller *controller;
 	struct mutex spi_lock;
+#ifdef CH341_SPI_OWN_SYSFS
+	struct mutex sysfs_lock;	/* serializes new_device and delete_device */
+#endif
 	u8 cs_allocated;    /* bitmask of allocated CS for SPI */
 	struct gpio_desc *spi_gpio_core_desc[3];
 	struct spi_client {
@@ -92,6 +99,15 @@ static const struct spi_gpio spi_gpio_cs[CH341_SPI_MAX_NUM_DEVICES] = {
 static size_t cha341_spi_max_tx_size(struct spi_device *spi)
 {
 	return CH341_SPI_NSEGS * (SEG_SIZE - 1);
+}
+
+static unsigned int ch341_spi_cs(const struct spi_device *spi)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,3,0)
+	return spi_get_chipselect(spi, 0);
+#else
+	return spi->chip_select;
+#endif
 }
 
 /* Send a command and get a reply if requested */
@@ -196,11 +212,7 @@ static int ch341_spi_transfer_one_message(struct spi_controller *controller,
 {
 	struct ch341_spi *dev = spi_controller_get_devdata(controller);
 	struct spi_device *spi = m->spi;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,3,0)
-	struct spi_client *client = &dev->spi_clients[spi_get_chipselect(spi, 0)];
-#else
-	struct spi_client *client = &dev->spi_clients[spi->chip_select];
-#endif
+	struct spi_client *client = &dev->spi_clients[ch341_spi_cs(spi)];
 	bool lsb = spi->mode & SPI_LSB_FIRST;
 	struct spi_transfer *xfer;
 	unsigned int buf_idx = 0;
@@ -306,22 +318,25 @@ static int request_core_gpios(struct ch341_spi *dev)
 	return 0;
 }
 
-/* Add a new device, defined by the board_info. */
-static int add_slave(struct ch341_spi *dev, struct spi_board_info *board_info)
+static int ch341_spi_setup(struct spi_device *spi)
 {
-	unsigned int cs = board_info->chip_select;
+	struct ch341_spi *dev = spi_controller_get_devdata(spi->controller);
+	unsigned int cs = ch341_spi_cs(spi);
 	struct spi_client *client;
 	struct gpio_desc *desc;
-	int ret;
+	int ret = 0;
 
 	/* Sanity check */
 	if (cs >= dev->controller->num_chipselect)
 		return -EINVAL;
 
 	client = &dev->spi_clients[cs];
-	board_info->bus_num = dev->controller->bus_num;
 
 	mutex_lock(&dev->spi_lock);
+
+	/* GPIOs already claimed for this device */
+	if (client->slave == spi)
+		goto unlock;
 
 	if (dev->cs_allocated & BIT(cs)) {
 		ret = -EADDRINUSE;
@@ -353,22 +368,12 @@ static int add_slave(struct ch341_spi *dev, struct spi_board_info *board_info)
 	}
 
 	client->gpio = desc;
+	client->slave = spi;
 	dev->cs_allocated |= BIT(cs);
-
-	client->slave = spi_new_device(dev->controller, board_info);
-	if (!client->slave) {
-		ret = -ENOMEM;
-		goto release_cs;
-	}
 
 	mutex_unlock(&dev->spi_lock);
 
 	return 0;
-
-release_cs:
-	gpiochip_free_own_desc(client->gpio);
-	client->gpio = NULL;
-	dev->cs_allocated &= ~BIT(cs);
 
 unreg_core_gpios:
 	if (dev->cs_allocated == 0)
@@ -380,39 +385,38 @@ unlock:
 	return ret;
 }
 
-static int remove_slave(struct ch341_spi *dev, unsigned int cs)
+static void ch341_spi_cleanup(struct spi_device *spi)
 {
-	int ret;
+	struct ch341_spi *dev = spi_controller_get_devdata(spi->controller);
+	unsigned int cs = ch341_spi_cs(spi);
+	struct spi_client *client;
 
-	if (cs >= ARRAY_SIZE(spi_gpio_cs))
-		return -EINVAL;
+	if (cs >= dev->controller->num_chipselect)
+		return;
+
+	client = &dev->spi_clients[cs];
 
 	mutex_lock(&dev->spi_lock);
 
-	if (dev->cs_allocated & BIT(cs)) {
-		dev->cs_allocated &= ~BIT(cs);
+	/* Nothing claimed for this device */
+	if (client->slave != spi)
+		goto unlock;
 
-		spi_unregister_device(dev->spi_clients[cs].slave);
-		dev->spi_clients[cs].slave = NULL;
+	gpiochip_free_own_desc(client->gpio);
+	client->gpio = NULL;
+	client->slave = NULL;
+	dev->cs_allocated &= ~BIT(cs);
 
-		gpiochip_free_own_desc(dev->spi_clients[cs].gpio);
-		dev->spi_clients[cs].gpio = NULL;
-
-		if (dev->cs_allocated == 0) {
-			/* Last slave. Release the core GPIOs */
-			release_core_gpios(dev);
-		}
-
-		ret = 0;
-	} else {
-		ret = -ENODEV;
+	if (dev->cs_allocated == 0) {
+		/* Last slave. Release the core GPIOs */
+		release_core_gpios(dev);
 	}
 
+unlock:
 	mutex_unlock(&dev->spi_lock);
-
-	return ret;
 }
 
+#ifdef CH341_SPI_OWN_SYSFS
 /*
  * sysfs entry to add a new device. It takes a string with 2
  * parameters: the modalias and the chip select number. For instance
@@ -428,6 +432,7 @@ static ssize_t new_device_store(struct device *mdev,
 		.mode = SPI_MODE_0,
 		.max_speed_hz = CH341_SPI_MAX_FREQ,
 	};
+	struct spi_device *spi;
 	char *req_org;
 	char *req;
 	char *str;
@@ -458,9 +463,18 @@ static ssize_t new_device_store(struct device *mdev,
 	if (ret)
 		goto free_req;
 
-	ret = add_slave(dev, &board_info);
-	if (ret)
+	if (board_info.chip_select >= controller->num_chipselect) {
+		ret = -EINVAL;
 		goto free_req;
+	}
+
+	mutex_lock(&dev->sysfs_lock);
+	spi = spi_new_device(controller, &board_info);
+	mutex_unlock(&dev->sysfs_lock);
+	if (!spi) {
+		ret = -EBUSY;
+		goto free_req;
+	}
 
 	kfree(req_org);
 
@@ -482,22 +496,39 @@ static ssize_t delete_device_store(struct device *mdev,
 {
 	struct spi_controller *controller = container_of(mdev, struct spi_controller, dev);
 	struct ch341_spi *dev = spi_controller_get_devdata(controller);
-	int cs;
+	struct spi_device *spi;
+	unsigned int cs;
 	int ret;
 
 	ret = kstrtouint(buf, 0, &cs);
 	if (ret)
 		return ret;
 
-	ret = remove_slave(dev, cs);
-	if (ret)
-		return ret;
+	if (cs >= controller->num_chipselect)
+		return -EINVAL;
 
-	return count;
+	mutex_lock(&dev->sysfs_lock);
+
+	mutex_lock(&dev->spi_lock);
+	spi = dev->spi_clients[cs].slave;
+	mutex_unlock(&dev->spi_lock);
+
+	if (spi) {
+		/* ch341_spi_cleanup() releases the GPIOs */
+		spi_unregister_device(spi);
+		ret = count;
+	} else {
+		ret = -ENODEV;
+	}
+
+	mutex_unlock(&dev->sysfs_lock);
+
+	return ret;
 }
 
 static DEVICE_ATTR_WO(new_device);
 static DEVICE_ATTR_WO(delete_device);
+#endif /* CH341_SPI_OWN_SYSFS */
 
 static
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6,11,0)
@@ -508,19 +539,17 @@ void
 ch341_spi_remove(struct platform_device *pdev)
 {
 	struct ch341_spi *dev = platform_get_drvdata(pdev);
-	int cs;
 
+#ifdef CH341_SPI_OWN_SYSFS
 	device_remove_file(&dev->controller->dev, &dev_attr_new_device);
 	device_remove_file(&dev->controller->dev, &dev_attr_delete_device);
+#endif
 
-	for (cs = 0; cs < ARRAY_SIZE(dev->spi_clients); cs++)
-		remove_slave(dev, cs);
+	spi_unregister_controller(dev->controller);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,7,0)
 	gpio_device_put(dev->gdev);
 #endif
-
-	spi_unregister_controller(dev->controller);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6,11,0)
 	return 0;
@@ -570,12 +599,17 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	}
 
 	mutex_init(&dev->spi_lock);
+#ifdef CH341_SPI_OWN_SYSFS
+	mutex_init(&dev->sysfs_lock);
+#endif
 
 	controller->bus_num = -1;
 	controller->num_chipselect = CH341_SPI_MAX_NUM_DEVICES;
 	controller->mode_bits = SPI_MODE_0 | SPI_LSB_FIRST;
 	controller->flags = SPI_CONTROLLER_MUST_RX | SPI_CONTROLLER_MUST_TX;
 	controller->bits_per_word_mask = SPI_BPW_MASK(8);
+	controller->setup = ch341_spi_setup;
+	controller->cleanup = ch341_spi_cleanup;
 	controller->transfer_one_message = ch341_spi_transfer_one_message;
 	controller->max_speed_hz = CH341_SPI_MAX_FREQ;
 	controller->min_speed_hz = CH341_SPI_MIN_FREQ;
@@ -586,6 +620,7 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	if (ret)
 		goto put_gpio;
 
+#ifdef CH341_SPI_OWN_SYSFS
 	ret = device_create_file(&controller->dev, &dev_attr_new_device);
 	if (ret) {
 		dev_err(&controller->dev, "Cannot create new_device file\n");
@@ -597,13 +632,16 @@ static int ch341_spi_probe(struct platform_device *pdev)
 		dev_err(&controller->dev, "Cannot create delete_device file\n");
 		goto del_new_device;
 	}
+#endif
 
 	return 0;
 
+#ifdef CH341_SPI_OWN_SYSFS
 del_new_device:
 	device_remove_file(&controller->dev, &dev_attr_new_device);
 unreg_controller:
 	spi_unregister_controller(controller);
+#endif
 put_gpio:
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,7,0)
 	gpio_device_put(dev->gdev);
