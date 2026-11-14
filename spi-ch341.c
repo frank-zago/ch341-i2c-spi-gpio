@@ -543,7 +543,7 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	struct ch341_spi *dev;
 	int ret;
 
-	controller = spi_alloc_host(&pdev->dev, sizeof(*dev));
+	controller = devm_spi_alloc_host(&pdev->dev, sizeof(*dev));
 	if (!controller)
 		return -ENOMEM;
 
@@ -558,10 +558,8 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	dev->gpiochip = gpiochip_find(pdev->dev.parent, match_gpiochip_parent);
 #else
 	dev->gdev = gpio_device_find(pdev->dev.parent, match_gpiochip_parent);
-	if (!dev->gdev) {
-		ret = -ENODEV;
-		goto unreg_controller;
-	}
+	if (!dev->gdev)
+		return -ENODEV;
 
 	dev->gpiochip = gpio_device_get_chip(dev->gdev);
 #endif
@@ -591,7 +589,7 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	ret = device_create_file(&controller->dev, &dev_attr_new_device);
 	if (ret) {
 		dev_err(&controller->dev, "Cannot create new_device file\n");
-		goto put_gpio;
+		goto unreg_controller;
 	}
 
 	ret = device_create_file(&controller->dev, &dev_attr_delete_device);
@@ -603,15 +601,13 @@ static int ch341_spi_probe(struct platform_device *pdev)
 	return 0;
 
 del_new_device:
-	device_remove_file(&dev->controller->dev, &dev_attr_new_device);
-
+	device_remove_file(&controller->dev, &dev_attr_new_device);
+unreg_controller:
+	spi_unregister_controller(controller);
 put_gpio:
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,7,0)
 	gpio_device_put(dev->gdev);
-
-unreg_controller:
 #endif
-	spi_controller_put(controller);
 
 	return ret;
 }
